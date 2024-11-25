@@ -17,7 +17,7 @@ module.exports = function (obj) {
     for (let i = 0; i < password.length; i++) {
       let key_id = 'com.android.systemui:id/key' + password[i]
       if ((button = id(key_id).findOne(_config.timeout_findOne)) !== null) {
-        button.click()
+        automator.clickRandom(button)
       }
       sleep(100)
     }

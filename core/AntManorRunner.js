@@ -15,6 +15,7 @@ _FloatyInstance.enableLog()
 let fodderCollector = require('./FodderCollector.js')
 let BaiduOcrUtil = require('../lib/BaiduOcrUtil.js')
 let localOcr = require('../lib/LocalOcrUtil.js')
+let automator = singletonRequire('Automator')
 let contentDefine = {
   soft: {
     personal_home: '进入个人鸡儿页面',
@@ -34,6 +35,8 @@ function getRegionCenter (region) {
   }
 }
 function AntManorRunner () {
+  
+  this.isSleep = false
 
   this.setFloatyTextColor = function (colorStr) {
     _FloatyInstance.setFloatyTextColor(colorStr)
@@ -45,27 +48,42 @@ function AntManorRunner () {
   }
 
   this.launchApp = function (reopen) {
+    debugInfo(['尝试打开支付宝，参数: {}', JSON.stringify(reopen)])
     app.startActivity({
       action: 'VIEW',
       data: 'alipays://platformapi/startapp?appId=66666674',
       packageName: 'com.eg.android.AlipayGphone'
     })
+
+    sleep(500)
     _FloatyInstance.setFloatyInfo({ x: config.device_width / 2, y: config.device_height / 2 }, "查找是否有'打开'对话框")
-    let confirm = widgetUtils.widgetGetOne(/^打开$/, 1000)
-    if (confirm) {
-      automator.clickCenter(confirm)
-    }
-    sleep(1000)
-    if (openAlipayMultiLogin(reopen)) {
-      this.launchApp(true)
+    let startTime = new Date().getTime()
+    while (new Date().getTime() - startTime < 30000) {
+      let confirm = widgetUtils.widgetGetOne(/^打开$/, 1000)
+      if (confirm) {
+        automator.clickRandom(confirm)
+        sleep(1000)
+      }
+          
+      if (openAlipayMultiLogin(reopen)) {
+        return this.launchApp(true)
+      }
+    
+      if (config.is_alipay_locked) {
+        alipayUnlocker.unlockAlipay()
+        sleep(1000)
+      }
+  
+      if (this.waitForOwn(true)) {
+        _FloatyInstance.setFloatyText('已进入蚂蚁庄园')
+        return true
+      }
+
+      sleep(1000)
     }
 
-    if (config.is_alipay_locked) {
-      sleep(1000)
-      alipayUnlocker.unlockAlipay()
-    }
-    sleep(1000)
-    this.waitForOwn()
+    errorInfo('打开蚂蚁庄园失败')
+    return false
   }
 
   this.waitFor = function (color, region, threshold, desc) {
@@ -110,10 +128,13 @@ function AntManorRunner () {
     return result.length > 0
   }
 
-  this.yoloCheck = function (desc, filter) {
+  this.yoloCheck = function (desc, filter, index) {
     let img = null
     let result = []
     let tryTime = 5
+    if (!index) {
+      index=0   
+    }
     WarningFloaty.clearAll()
     debugInfo(['通过YOLO查找：{} props: {}', desc, JSON.stringify(filter)])
     do {
@@ -121,8 +142,8 @@ function AntManorRunner () {
       img = _commonFunctions.captureScreen()
       result = YoloDetection.forward(img, filter)
     } while (result.length <= 0 && tryTime-- > 0)
-    if (result.length > 0) {
-      let { x, y, width, height, label, confidence } = result[0]
+    if (result.length > index) {
+      let { x, y, width, height, label, confidence } = result[index]
       let left = x, top = y
       WarningFloaty.addRectangle('找到：' + desc, [left, top, width, height])
       debugInfo(['通过YOLO找到目标：{} label: {} confidence: {}', desc, label, confidence])
@@ -156,25 +177,28 @@ function AntManorRunner () {
    */
   this.waitForOwn = function (keepAlive) {
     let findColor = false
-    if (YoloDetection.enabled) {
-      findColor = this.yoloWaitFor('领饲料', { confidence: 0.7, labelRegex: 'collect_food' })
-    } else {
-      findColor = this.waitFor(config.CHECK_APP_COLOR, config.CHECK_APP_REGION, null, '小鸡主界面')
-    }
-    if (findColor) {
-      this.setFloatyInfo(null, CONTENT.personal_home + '成功')
-      return true
-    } else {
-      this.setFloatyInfo(null, '检测失败，尝试OCR识别')
-      if (this.checkByOcr([0, 0, config.device_width * 0.2, config.device_height / 2], '捐蛋反馈|开心飞起')) {
+    let limit = 2
+    do {
+      if (YoloDetection.enabled) {
+        findColor = this.yoloWaitFor('领饲料', { confidence: 0.7, labelRegex: 'collect_food' })
+      } else {
+        findColor = this.waitFor(config.CHECK_APP_COLOR, config.CHECK_APP_REGION, null, '小鸡主界面')
+      }
+      if (findColor) {
         this.setFloatyInfo(null, CONTENT.personal_home + '成功')
         return true
+      } else {
+        this.setFloatyInfo(null, '检测失败，尝试OCR识别')
+        if (this.checkByOcr([0, 0, config.device_width * 0.2, config.device_height / 2], '捐蛋反馈|开心飞起|小鸡乐园|小鸡日记')) {
+          this.setFloatyInfo(null, CONTENT.personal_home + '成功')
+          return true
+        }
       }
-      this.setFloatyTextColor('#ff0000')
-      this.setFloatyInfo(getRegionCenter(config.CHECK_APP_REGION), CONTENT.personal_home + '失败，检测超时 ' + (keepAlive ? '等待脚本执行后续判断' : ''))
-      if (!keepAlive) {
-        this.killAndRestart()
-      }
+    } while (limit-- > 0)
+    this.setFloatyTextColor('#ff0000')
+    this.setFloatyInfo(getRegionCenter(config.CHECK_APP_REGION), CONTENT.personal_home + '失败，检测超时 ' + (keepAlive ? '等待脚本执行后续判断' : ''))
+    if (!keepAlive) {
+      this.killAndRestart()
     }
     return false
   }
@@ -183,19 +207,21 @@ function AntManorRunner () {
   this.waitForFriends = function () {
     let findColor = false
     if (YoloDetection.enabled) {
-      findColor = this.yoloWaitFor('给ta留言|召回', { confidence: 0.7, labelRegex: 'leave_msg|bring_back' })
+      findColor = this.yoloWaitFor('给Ta留言|召回', { confidence: 0.7, labelRegex: 'leave_msg|bring_back' })
     } else {
       findColor = this.waitFor(config.CHECK_FRIENDS_COLOR, config.CHECK_FRIENDS_REGION, null, '好友界面')
-      if (findColor) {
+    }
+    if (findColor) {
+      this.setFloatyInfo(null, CONTENT.friend_home + '成功')
+      return true
+    } else {
+      this.setFloatyInfo(null, '检测失败，尝试OCR识别')
+      if (this.checkByOcr([0, 0, config.device_width * 0.2, config.device_height / 2], '给Ta留言')) {
         this.setFloatyInfo(null, CONTENT.friend_home + '成功')
         return true
-      } else {
-        if (this.checkByOcr([0, 0, config.device_width * 0.2, config.device_height / 2], '给Ta留言')) {
-          this.setFloatyInfo(null, CONTENT.friend_home + '成功')
-          return true
-        }
       }
     }
+    
     let img = _commonFunctions.captureScreen()
     if (!findColor) {
       yoloTrainHelper.saveImage(img, '进入好友界面失败', 'friend_home_failed')
@@ -205,6 +231,7 @@ function AntManorRunner () {
     } else {
       yoloTrainHelper.saveImage(img, '进入好友界面成功', 'friend_home_success')
     }
+    return false
   }
 
   this.waitForDismiss = function () {
@@ -230,6 +257,7 @@ function AntManorRunner () {
       hour: now.getHours(),
       minute: now.getMinutes(),
     }
+    this.isSleep = false
     if (currentTime.hour > 6 && currentTime.hour < 20) {
       // 晚上八点到早上6点检查是否睡觉中 其他时间跳过
       debugInfo(['当前时间{} 不在晚上八点和早上6点之间', currentTime.hour])
@@ -242,28 +270,29 @@ function AntManorRunner () {
     let screen = _commonFunctions.checkCaptureScreenPermission()
     let sleepWidget = localOcr.recognizeWithBounds(screen, null, '睡觉中')
     if (sleepWidget && sleepWidget.length > 0) {
+      this.isSleep = true
       let sleepBounds = sleepWidget[0].bounds
       yoloTrainHelper.saveImage(screen, '睡觉中', 'sleeping')
       debugInfo(['find text: {}', sleepWidget[0].label])
       this.setFloatyInfo({ x: sleepBounds.left, y: sleepBounds.top }, '小鸡睡觉中')
       sleep(1000)
       // 仅仅main.js时创建第二天的定时任务
-      if ((engines.myEngine().getSource() + '').endsWith('main.js')) {
-        // 设置第二天早上六点05启动 计算间隔时间
-        _commonFunctions.setUpAutoStart(
-          6 * 60 + (currentTime.hour >= 20 ?
-            // 晚上八点后 加上当天剩余时间（分）
-            (24 - currentTime.hour) * 60 - currentTime.minute
-            // 早上六点前 减去已经经过的时间（分）
-            : -(currentTime.hour * 60 + currentTime.minute)) + 5
-        )
-      }
-      _commonFunctions.minimize()
-      resourceMonitor.releaseAll()
-      _runningQueueDispatcher.removeRunningTask()
+      // if ((engines.myEngine().getSource() + '').endsWith('main.js')) {
+      //   // 设置第二天早上六点05启动 计算间隔时间
+      //   _commonFunctions.setUpAutoStart(
+      //     6 * 60 + (currentTime.hour >= 20 ?
+      //       // 晚上八点后 加上当天剩余时间（分）
+      //       (24 - currentTime.hour) * 60 - currentTime.minute
+      //       // 早上六点前 减去已经经过的时间（分）
+      //       : -(currentTime.hour * 60 + currentTime.minute)) + 5
+      //   )
+      // }
       if (notExit) {
         return true
       } else {
+        _commonFunctions.minimize()
+        resourceMonitor.releaseAll()
+        _runningQueueDispatcher.removeRunningTask()
         exit()
       }
     }
@@ -319,89 +348,66 @@ function AntManorRunner () {
   }
 
   this.checkAndBringBack = function () {
-    this.waitForFriends()
-    WarningFloaty.clearAll()
-    if (YoloDetection.enabled) {
-      let bringBack = this.yoloCheck('召回', { confidence: 0.7, labelRegex: 'bring_back' })
-      if (bringBack) {
-        this.setFloatyInfo(bringBack, '召回')
-        click(bringBack.x, bringBack.y)
-        this.yoloClickConfirm()
+    let isBringBack = false
+
+    //检查是否被带去除草
+    let removeGrassTag = widgetUtils.widgetGetOne('除草中', 2000)
+    if (removeGrassTag) {
+      LogFloaty.pushLog('小鸡被带去除草了')
+      let callBackBtn = removeGrassTag.parent().children().findOne(className("Button"))
+      if (callBackBtn) {
+        automator.clickRandom(callBackBtn)
+        sleep(1000)
         automator.back()
-        this.waitForOwn()
-        return
-      }
-      let thiefChicken = this.yoloCheck('工作鸡或小偷鸡', { confidence: 0.7, labelRegex: 'working_chicken|thief_chicken' })
-      if (thiefChicken) {
-        let content = '小偷鸡'
-        if (thiefChicken.label == 'working_chicken') {
-          content = '工作鸡'
-        }
-        yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '找到' + content, 'thief_chicken')
-        click(thiefChicken.x, thiefChicken.y)
-        let isWorking = widgetUtils.widgetGetOne('小鸡工作中.*', 1000)
-        if (isWorking) {
-          _FloatyInstance.setFloatyText('小鸡工作中，寻找确认按钮')
-          let confirmBtn = widgetUtils.widgetGetOne('确认')
-          if (confirmBtn) {
-            this.setFloatyInfo({ x: confirmBtn.bounds().left, y: confirmBtn.bounds().top }, '确认按钮')
-            automator.clickCenter(confirmBtn)
-          } else {
-            _FloatyInstance.setFloatyText('未找到确认按钮')
-            errorInfo('未找到确认按钮，请手动执行', true)
-          }
-        }
+        sleep(1000)
+        isBringBack = true
       }
     } else {
-      WarningFloaty.addRectangle('校验左侧', config.OUT_IN_FRIENDS_REGION_LEFT)
-      sleep(1000)
-      let img = _commonFunctions.checkCaptureScreenPermission()
-      let findColor = images.findColor(img, config.OUT_IN_FRIENDS_COLOR, {
-        region: config.OUT_IN_FRIENDS_REGION_LEFT,
-        threshold: config.color_offset
-      })
-      if (!findColor) {
-        WarningFloaty.addRectangle('校验右侧', config.OUT_IN_FRIENDS_REGION_RIGHT)
-        findColor = images.findColor(img, config.OUT_IN_FRIENDS_COLOR, {
-          region: config.OUT_IN_FRIENDS_REGION_RIGHT,
-          threshold: config.color_offset
-        })
-      }
-      if (findColor) {
-        yoloTrainHelper.saveImage(img, '小鸡在好友家', 'friend_home_success')
-        this.setFloatyInfo(findColor, '找到了我的小鸡')
-        sleep(1000)
-        let heightRate = config.device_height / 2160
-        this.setFloatyInfo({ x: findColor.x, y: findColor.y + 200 * heightRate }, '点击叫回小鸡')
-        click(findColor.x, parseInt(findColor.y + 200 * heightRate))
-        let isWorking = widgetUtils.widgetGetOne('小鸡工作中.*', 1000)
-        if (isWorking) {
-          _FloatyInstance.setFloatyText('小鸡工作中，寻找确认按钮')
-          let confirmBtn = widgetUtils.widgetGetOne('确认')
-          if (confirmBtn) {
-            this.setFloatyInfo({ x: confirmBtn.bounds().left, y: confirmBtn.bounds().top }, '确认按钮')
-            automator.clickCenter(confirmBtn)
-          } else {
-            _FloatyInstance.setFloatyText('未找到确认按钮')
-            errorInfo('未找到确认按钮，请手动执行', true)
+      //到朋友家带回小鸡
+      this.waitForFriends()
+      WarningFloaty.clearAll()
+
+      let screen = _commonFunctions.checkCaptureScreenPermission()
+      if (screen) {
+        let result = localOcr.recognizeWithBounds(screen, [0, config.device_height / 2, config.device_width, config.device_height / 2], '你的小鸡')
+        if (result && result.length > 0) {
+          let bounds = result[0].bounds
+          LogFloaty.pushLog('你的小鸡位置：' + JSON.stringify({ x: bounds.centerX(), y: bounds.centerY() }))
+          automator.clickPointRandom(bounds.centerX(), bounds.centerY()+200)
+          isBringBack = true
+          sleep(1000)
+    
+          let isWorking = widgetUtils.widgetGetOne('小鸡工作中.*', 1000)
+          if (isWorking) {
+            _FloatyInstance.setFloatyText('小鸡工作中，寻找确认按钮')
+            let confirmBtn = widgetUtils.widgetGetOne('确认')
+            if (confirmBtn) {
+              this.setFloatyInfo({ x: confirmBtn.bounds().left, y: confirmBtn.bounds().top }, '确认按钮')
+              automator.clickRandom(confirmBtn)
+              sleep(1000)
+            } else {
+              _FloatyInstance.setFloatyText('未找到确认按钮')
+              errorInfo('未找到确认按钮，请手动执行', true)
+              isBringBack = false
+            }
           }
         }
-        sleep(1000)
-        this.waitForOwn()
-      } else {
-        yoloTrainHelper.saveImage(img, '小鸡不在好友家', 'friend_home_failed')
-        this.setFloatyTextColor('#ff0000')
-        this.setFloatyInfo(getRegionCenter(config.OUT_IN_FRIENDS_REGION_LEFT), '没有找到小鸡，奇了怪了！')
-        return false
       }
     }
+    if (!isBringBack) {
+      automator.back()
+    }
+
+    sleep(1000)
+    this.waitForOwn()
   }
 
   this.checkIfChikenOut = function () {
     let outBtn = widgetUtils.widgetGetOne('找小鸡', 2000)
     if (outBtn) {
       yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '小鸡外出了', 'chick_out')
-      automator.clickCenter(outBtn)
+      automator.clickRandom(outBtn)
+      sleep(8000)
       this.checkAndBringBack()
       return true
     }
@@ -522,12 +528,6 @@ function AntManorRunner () {
     if (feed) {
       // 刚刚喂食，且成功识别OCR，将当前时间设置为执行倒计时
       _commonFunctions.updateSleepTime(20, false, ocrRestTime)
-      // 喂鸡后领取饲料
-      fodderCollector.exec()
-      if (!this.waitForOwn(true)) {
-        debugInfo(['打开小鸡页面失败，重新打开'])
-        this.launchApp(true)
-      }
     } else if (ocrRestTime > -1) {
       // 大概情况就是上一次执行喂食后加速卡用完了 导致OCR识别失败 以上机制懒得修改了 先这么适配
       let feedPassedTime = _commonFunctions.getFeedPassedTime()
@@ -547,6 +547,7 @@ function AntManorRunner () {
       let checkHasOrNoFood = this.yoloCheck('校验有饭吃', { confidence: 0.7, labelRegex: 'has_food|no_food' })
       img = _commonFunctions.checkCaptureScreenPermission()
       if (checkHasOrNoFood && checkHasOrNoFood.label == 'has_food') {
+        config.COUNT_DOWN_REGION = [checkHasOrNoFood.left, checkHasOrNoFood.top - 100, checkHasOrNoFood.width + 30, 100]
         yoloTrainHelper.saveImage(img, '小鸡有饭吃', 'eating_chicken')
         this.setFloatyInfo(checkHasOrNoFood, '小鸡有饭吃哦')
       } else {
@@ -554,8 +555,22 @@ function AntManorRunner () {
         _FloatyInstance.setFloatyText('小鸡没饭吃')
         let feedBtn = this.yoloCheck('喂饭按钮', { confidence: 0.7, labelRegex: 'feed_btn' })
         if (feedBtn) {
+          //OCR检查是否有特殊食物
+          let foodDesc = this.checkByOcr([feedBtn.left,feedBtn.top,feedBtn.width,feedBtn.height], '^\\d+g$', 1)
+          if (!foodDesc) {
+            let clickPoint = [feedBtn.x, feedBtn.top - 20]
+            automator.clickPointRandom(clickPoint[0], clickPoint[1])
+            sleep(2000)
+            foodDesc = this.checkByOcr([feedBtn.left,config.device_height/2,feedBtn.width,feedBtn.top-config.device_height/2], '^\\d+g$')
+          }
           // 执行喂饭
-          click(feedBtn.x, feedBtn.y)
+          if (foodDesc) {
+            debugInfo(['点击喂饭按钮：[{}, {}]',foodDesc.bounds.centerX(),foodDesc.bounds.centerY()])
+            automator.clickPointRandom(foodDesc.bounds.centerX(), foodDesc.bounds.centerY()-10)
+            sleep(2000)
+          } else {
+            // click(feedBtn.x, feedBtn.y)
+          }
           feed = true
         } else {
           _FloatyInstance.setFloatyText('未找到喂饭按钮')
@@ -577,6 +592,7 @@ function AntManorRunner () {
           this.setFloatyInfo({ x: config.FOOD_REGION[0], y: config.FOOD_REGION[1] }, '小鸡没饭吃呢')
           yoloTrainHelper.saveImage(img, '小鸡没饭吃', 'hungry_chicken')
           click(config.FEED_POSITION.x, config.FEED_POSITION.y)
+          sleep(2000)
           feed = true
         }
       } else {
@@ -619,22 +635,16 @@ function AntManorRunner () {
       yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '准备点击道具', 'item')
       click(config.TOOL_POSITION.x, config.TOOL_POSITION.y)
       sleep(1000)
-      // sleep(1000)
-      // yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '点击使用道具')
-      // click(config.SPEED_CARD_POSITION.x, config.SPEED_CARD_POSITION.y)
-      // sleep(1000)
-      // yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '确认使用弹窗')
-      // click(config.CONFIRM_POSITON.x, config.CONFIRM_POSITON.y)
     }
     let speedupCard = widgetUtils.widgetGetOne('加速卡')
     if (speedupCard) {
-      automator.clickCenter(speedupCard)
+      automator.clickRandom(speedupCard)
       sleep(1000)
       let confirmUsing = widgetUtils.widgetGetOne('立即加速')
       if (!confirmUsing) {
         warnInfo(['未找到使用按钮，可能是加速卡用完了'])
       } else {
-        automator.clickCenter(confirmUsing)
+        automator.clickRandom(confirmUsing)
       }
       sleep(1000)
       automator.back()
@@ -658,10 +668,169 @@ function AntManorRunner () {
     // todo 执行捡屎 训练
     if (pickedShit) {
       this.checker.checkAndCollectMuck()
+      //关闭小鸡肥料厂
+      let title = widgetUtils.widgetGetOne('小鸡肥料厂')
+      if (title) {
+        title = title.parent().child(title.indexInParent()-1)
+        automator.clickRandom(title)
+      }
     } else {
       this.setFloatyInfo(null, "没有屎可以捡")
       yoloTrainHelper.saveImage(_commonFunctions.checkCaptureScreenPermission(), '没有屎可以捡', 'pick_shit')
     }
+  }
+
+  //抽奖一次并返回奖品信息
+  this.luckyDraw = function () {
+    debugInfo('抽抽乐 抽奖一次')  
+    let clickBtn = widgetUtils.widgetGetOne('还剩\\d+次机会',2000)
+    if (clickBtn) {
+      let drawTimes = new RegExp('还剩(\\d+)次机会').exec(clickBtn.text())[1]
+      if (drawTimes > 0) {
+        debugInfo('抽奖还有' + drawTimes + '次机会')
+      } else {
+        debugInfo('抽奖机会用完啦')
+        return
+      }
+      automator.clickRandom(clickBtn)
+      debugInfo('抽抽乐 等待抽奖结束')
+      sleep(3000)
+      debugInfo('开始识别抽奖结果')
+      let luckyItem= widgetUtils.widgetGetOne('.*\\(\\d+.*\\)',2000)
+      let luckyResult = null
+      if (luckyItem) {
+        luckyResult = new RegExp('(.*)\\((\\d+)(.*)\\)').exec(luckyItem.text())
+        debugInfo(['抽抽乐 获得：{} {} {}',luckyResult[1], luckyResult[2], luckyResult[3]])
+        luckyResult[0] = drawTimes - 1
+      }
+      automator.clickRandom(widgetUtils.widgetGetOne('知道啦',2000))
+      sleep(1000)
+      return luckyResult
+    }
+  }
+  
+  this.doFamily = function () {
+    //OCR检查“家庭”并点击
+    let familyBtn = this.checkByOcr([0,config.device_height/4*3,config.device_width,config.device_height/4],'^家庭$')
+    if (familyBtn) {
+      _FloatyInstance.setFloatyText('点击家庭')
+      automator.clickPointRandom(familyBtn.bounds.centerX(), familyBtn.bounds.centerY()-20)
+      sleep(6000)
+    } else {
+      return
+    }
+
+    let now = new Date()
+    let hour = now.getHours()
+
+    //6:00-10:00道早安
+    let isMorning = hour >= 6 && hour < 10
+    if (isMorning) {
+      let morningBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^道早安$',1)
+      if (morningBtn) {
+        _FloatyInstance.setFloatyText('发现早安按钮, 道早安')
+        automator.clickPointRandom(morningBtn.bounds.centerX(), morningBtn.bounds.centerY())
+        sleep(1000)
+        let confirmBtn = widgetUtils.widgetGetOne('确认发送',2000)
+        if (confirmBtn) {
+          automator.clickRandom(confirmBtn)
+          sleep(1000)
+
+         let closeBtn = widgetUtils.widgetGetOne('复制口令邀请.*',2000)
+         closeBtn = closeBtn? (closeBtn.parent()? closeBtn.parent().parent().child(2):null) : null
+         if (closeBtn) {
+            automator.clickRandom(closeBtn)
+            sleep(1000)
+          }
+        }
+      }
+    }
+    //6:00-10:00、11:00-15:00、16:00-20:00 之间请客
+    let isEatTime = hour >= 6 && hour < 10 || hour >= 11 && hour < 15 || hour >= 16 && hour < 20
+    if (isEatTime) {
+      let eatBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去请客$',1)
+      if (eatBtn) {
+        _FloatyInstance.setFloatyText('发现请客按钮，请客吃饭')
+        eatClickPoint = [config.device_width/2,eatBtn.bounds.bottom+100]
+        automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
+        sleep(1000)
+        let luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食',2000)
+        if (luckyBtn) {
+          let foodItems = widgetUtils.widgetGetAll('.*美食不足.*',2000)
+          let needFoodNum = foodItems? foodItems.length:0
+          debugInfo('美食不足，需要' + needFoodNum + '个')
+
+          //进入抽奖界面
+          automator.clickRandom(luckyBtn)
+          sleep(2000)
+          //抽奖直到满足需求
+          while (needFoodNum > 0) {
+            // 抽奖一次
+            drawResult = this.luckyDraw()
+            let drawTimes = drawResult? drawResult[0]:0
+            let luckyItemNum = drawResult? drawResult[2]:0
+            let luckyItemType = drawResult? drawResult[3]:''
+            if (luckyItemType=='份') {
+              needFoodNum -= luckyItemNum
+              debugInfo('还需' + needFoodNum + '个美食')
+            }
+            if (drawTimes <= 0) {
+              debugInfo('抽奖机会用完啦')
+              break
+            }
+          }
+          // 返回家庭界面
+          automator.back()
+          sleep(2000)
+          
+          //关闭并重新打开请客界面
+          luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食',2000)
+          if (luckyBtn) {
+            let closeBtn = luckyBtn.parent()? luckyBtn.parent().child(luckyBtn.indexInParent()+1):null
+            if (closeBtn) {
+              automator.clickRandom(closeBtn)
+              sleep(1000)
+            }
+            //如果食物已足够，则再次打开请客界面
+            if (needFoodNum <= 0) {
+              automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
+              sleep(1000)
+            }
+          }
+        }
+          
+        let confirmBtn = widgetUtils.widgetGetOne('^确认$',2000)
+        if (confirmBtn) {
+          automator.clickRandom(confirmBtn)
+          sleep(1000)
+        }
+      }
+    }
+
+    //帮喂饭
+    // let feedBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去喂食$',1)
+    // if (feedBtn) {
+    //   _FloatyInstance.setFloatyText('发现喂食按钮，帮喂食')
+    //   automator.clickPointRandom(feedBtn.bounds.centerX(), feedBtn.bounds.centerY())
+    //   sleep(1000)
+    //   let confirmBtn = widgetUtils.widgetGetOne('^确认.*$',2000)
+    //   if (confirmBtn) {
+    //     automator.clickRandom(confirmBtn)
+    //     sleep(1000)
+    //   }
+    // }
+    
+    //OCR检查“立即签到”并点击
+    let signBtn = this.checkByOcr([0,config.device_height/4*3,config.device_width,config.device_height/4],'^立即签到$',1)
+    if (signBtn) {
+      _FloatyInstance.setFloatyText('发现签到按钮，进行签到')
+      automator.clickPointRandom(signBtn.bounds.centerX(), signBtn.bounds.centerY())
+      sleep(1000)
+    }
+
+    //返回主界面
+    automator.back()
+    sleep(2000)
   }
 
   this.recognizeCountdownByOcr = function () {
@@ -729,7 +898,7 @@ function AntManorRunner () {
     }, 30000)
   }
 
-  this.checkByOcr = function (region, contentRegex) {
+  this.checkByOcr = function (region, contentRegex, limit) {
     if (!localOcr.enabled) {
       warnInfo(['请至少安装mlkit-ocr插件或者修改版AutoJS获取本地OCR能力'])
       return false
@@ -737,17 +906,17 @@ function AntManorRunner () {
     _FloatyInstance.hide()
     sleep(50)
     try {
-      let limit = 3
+      limit = limit || 3
       while (limit-- > 0) {
         let screen = _commonFunctions.checkCaptureScreenPermission()
         if (screen) {
           debugInfo(['ocr识别 {} 内容：{}', region ? '区域' + JSON.stringify(region) : '', contentRegex])
           let result = localOcr.recognizeWithBounds(screen, region, contentRegex)
           if (result && result.length > 0) {
-            return true
+            return result[0]
           }
         }
-        sleep(100)
+        sleep(1000)
       }
       return false
     } finally {
@@ -757,11 +926,16 @@ function AntManorRunner () {
 
   this.start = function () {
     this.checker = YoloDetection.enabled ? new YoloChecker(this) : new ColorChecker(this)
-    this.launchApp()
+    if (!this.launchApp()) {
+      warnInfo(['打开项目失败，5分钟后重新尝试'])
+      _commonFunctions.setUpAutoStart(5)
+      return false
+    }
     this.setFloatyInfo(null, '打开APP成功！')
     sleep(1000)
-    this.checkIsSleeping()
-    this.checkIsOut()
+    if(!this.checkIsSleeping()) {
+      this.checkIsOut()
+    }
     if (this.checker.checkThief()) {
       // 揍过鸡
       _commonFunctions.setPunched()
@@ -772,10 +946,18 @@ function AntManorRunner () {
     this.checkAndFeed()
     WarningFloaty.clearAll()
     sleep(1000)
+    fodderCollector.exec()
+    sleep(1000)
+    //做完任务再检查一次喂食剩余时间，雇佣小鸡可能会缩短时间
+    this.checkAndFeed()
+    WarningFloaty.clearAll()
+    
     if (config.pick_shit) {
       this.checkAndPickShit()
     }
     sleep(2000)
+    this.doFamily()
+    sleep(1000)
     _commonFunctions.minimize()
     resourceMonitor.releaseAll()
   }
@@ -920,11 +1102,14 @@ function AntManorRunner () {
   }
 
   YoloChecker.prototype.checkAndCollectMuck = function () {
-    let execPickMuck = this.mainExecutor.yoloCheck('执行收集饲料', { confidence: 0.7, labelRegex: 'collect_muck' })
-    if (execPickMuck) {
+    let index = 0;
+    let execPickMuck = null;
+    while (execPickMuck = this.mainExecutor.yoloCheck('执行收集饲料', { confidence: 0.7, labelRegex: 'collect_muck' }, index)){
       this.mainExecutor.setFloatyInfo(execPickMuck, '收集饲料')
       click(execPickMuck.x, execPickMuck.y)
-    } else {
+      index++
+    }
+    if (!execPickMuck && index==0) {
       warnInfo(['未能通过YOLO识别执行收集饲料的区域'])
     }
   }
@@ -938,15 +1123,15 @@ function AntManorRunner () {
   YoloChecker.prototype.driveThief = function (findThief) {
     if (findThief) {
       debugInfo(['找到了野鸡：{},{}', findThief.x, findThief.y])
-      automator.click(findThief.x, findThief.y)
+      automator.clickPointRandom(findThief.x, findThief.y)
       sleep(1000)
       let kickOut = this.mainExecutor.yoloCheck('赶走', { confidence: 0.7, labelRegex: 'kick-out' })
       if (kickOut) {
-        automator.click(kickOut.x, kickOut.y)
+        automator.clickPointRandom(kickOut.x, kickOut.y)
         yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '关闭按钮', 'confirm_btn')
         let notLeaveMsg = widgetUtils.widgetGetOne('不留言', 1000)
         if (notLeaveMsg) {
-          automator.clickCenter(notLeaveMsg)
+          automator.clickRandom(notLeaveMsg)
         } else {
           this.mainExecutor.yoloClickConfirm(true)
         }
@@ -954,6 +1139,7 @@ function AntManorRunner () {
         return true
       } else {
         warnInfo(['未能找到赶走按钮，请确认是否是邀请了工作小鸡'])
+        automator.clickPointRandom(findThief.x, findThief.y)
       }
     }
     return false
@@ -961,16 +1147,19 @@ function AntManorRunner () {
 
   YoloChecker.prototype.checkThief = function () {
     let kicked = false
+    let workerCount = 0
     this.mainExecutor.setFloatyInfo(null, '准备校验是否有偷吃野鸡')
     let findThiefLeft = this.mainExecutor.yoloCheck('偷吃野鸡', { confidence: 0.7, labelRegex: 'thief_chicken', filter: (result) => result.x < config.device_width / 2 })
-    kicked |= this.driveThief(findThiefLeft)
+    this.driveThief(findThiefLeft) ? kicked = true : (findThiefLeft && workerCount++)
     let findThiefRight = this.mainExecutor.yoloCheck('偷吃野鸡', { confidence: 0.7, labelRegex: 'thief_chicken', filter: (result) => result.x > config.device_width / 2 })
-    kicked |= this.driveThief(findThiefRight)
+    this.driveThief(findThiefRight) ? kicked = true : (findThiefRight && workerCount++)
 
     if (!kicked) {
       debugInfo('未找到偷吃野鸡')
       this.mainExecutor.setFloatyInfo(null, '未找到偷吃野鸡')
     }
+
+    _commonFunctions.setWorkerCount(workerCount)
     return kicked
   }
 }
@@ -983,7 +1172,10 @@ function openAlipayMultiLogin (reopen) {
     debugInfo(['已开启多设备自动登录检测，检查是否有 进入支付宝 按钮'])
     let entryBtn = widgetUtils.widgetGetOne(/^进入支付宝$/, 1000)
     if (entryBtn) {
-      automator.clickCenter(entryBtn)
+      _FloatyInstance.setFloatyText('其他设备正在登录，等待5分钟后进入')
+      _commonFunctions.waitForAction(300, '等待进入支付宝')
+      unlocker && unlocker.exec()
+      automator.clickRandom(entryBtn)
       sleep(1000)
       return true
     } else {

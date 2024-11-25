@@ -1,3 +1,7 @@
+let { config } = require('../config.js')(runtime, this)
+let singletonRequire = require('../lib/SingletonRequirer.js')(runtime, this)
+let logUtils = singletonRequire('LogUtils')
+let localOcrUtil = require('../lib/LocalOcrUtil.js')
 let currentEngine = engines.myEngine()
 let runningEngines = engines.all()
 let currentSource = currentEngine.getSource() + ''
@@ -35,15 +39,22 @@ function captureAndOcr() {
     toastLog('截图失败')
   }
   let start = new Date()
-  result = $ocr.detect(img)
+  result = localOcrUtil.recognizeWithBounds(img,  [0,0,config.device_width/2,config.device_height/2], '商城|精灵|抽.*|日记|好友|装扮|勋章')
   toastLog('耗时' + (new Date() - start) + 'ms')
   capturing = false
+
+  if (result && result.length > 0) {
+    for (let i = 0; i < result.length; i++) {
+      let ocrResult = result[i]
+      logUtils.debugInfo(JSON.stringify(ocrResult))
+    }
+  }
 }
 
 captureAndOcr()
 
 // 获取状态栏高度
-let offset = -getStatusBarHeightCompat()
+let offset = 0 //-getStatusBarHeightCompat()
 
 // 绘制识别结果
 let window = floaty.rawWindow(

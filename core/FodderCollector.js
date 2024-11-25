@@ -10,6 +10,8 @@ let localOcr = require('../lib/LocalOcrUtil.js')
 let LogFloaty = singletonRequire('LogFloaty')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
 let AiUtil = require('../lib/AIRequestUtil.js')
+let FloatyInstance = singletonRequire('FloatyUtil')
+let manorRunner = require('../core/AntManorRunner.js')
 
 function Collector () {
   let _this = this
@@ -20,17 +22,23 @@ function Collector () {
   this.storage = storages.create(storage_name)
 
   this.imageConfig = config.fodder_config
+  
+  this.collectEntry = null;
 
   this.exec = function () {
     let screen = commonFunctions.captureScreen()
     if (screen) {
       LogFloaty.pushLog('查找领饲料入口')
-      let matchResult = this.findCollectEntry(screen)
-      if (matchResult) {
+      this.collectEntry = this.findCollectEntry(screen)
+      if (this.collectEntry) {
         LogFloaty.pushLog('已找到领饲料入口')
-        toastLog('找到了领饲料位置' + JSON.stringify(matchResult))
-        automator.click(matchResult.centerX(), matchResult.centerY())
-        sleep(1000)
+        debugInfo('找到了领饲料位置' + JSON.stringify(this.collectEntry))
+        automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
+        sleep(3000)
+        if (!this.isInTaskUI()) {
+          //automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
+          sleep(3000)
+        }
         this.doDailyTasks()
         LogFloaty.pushLog('每日任务执行完毕，开始收集可收取饲料')
         this.collectAllIfExists()
@@ -49,15 +57,15 @@ function Collector () {
   this.findCollectEntry = function (screen) {
     let originScreen = images.copy(screen)
     if (YoloDetection.enabled) {
-      LogFloaty.pushLog('尝试YOLO查找领饲料入口')
+      LogFloaty.pushLog('')
       let result = YoloDetection.forward(screen, { confidence: 0.7, labelRegex: 'collect_food' })
       if (result && result.length > 0) {
-        let { x, y, width, height } = result[0]
+        let { x, y, centerX, centerY } = result[0]
         LogFloaty.pushLog('Yolo找到：领饲料入口')
         return {
           x: x, y: y,
-          centerX: () => x,
-          centerY: () => y
+          centerX: () => centerX,
+          centerY: () => centerY
         }
       }
     }
@@ -74,246 +82,715 @@ function Collector () {
       // 尝试
       matchResult = OpenCvUtil.findBySIFTBase64(screen, this.imageConfig.fodder_btn)
       this.useSimpleForMatchCollect = false
+    }
+    if (matchResult) {
       logUtils.debugInfo(['找到目标：「{},{}」[{},{}]', matchResult.roundX(), matchResult.roundY(), matchResult.width(), matchResult.height()])
       let template_img_for_collect = images.toBase64(images.clip(originScreen, matchResult.roundX(), matchResult.roundY(), matchResult.width(), matchResult.height()))
       config.overwrite('fodder.fodder_btn', template_img_for_collect)
       logUtils.debugInfo('自动更新图片配置 fodder.fodder_btn')
       logUtils.debugForDev(['自动保存匹配图片：{}', template_img_for_collect])
-    }
-    if (matchResult) {
-      toastLog('找到了领饲料位置' + JSON.stringify(matchResult))
+      logUtils.debugInfo('找到了领饲料位置' + JSON.stringify(matchResult))
       return matchResult
     }
   }
 
-  this.doDailyTasks = function () {
-    // 答题
-    this.answerQuestion()
-    // 小视频
-    this.watchVideo()
-    // 逛一逛
-    this.browseAds()
-    // 抽抽乐
-    this.luckyDraw()
-    // 农场施肥
-    this.farmFertilize()
-    // 逛一逛助农专场
-    this.browseHelpFarm()
+  let randomTop = {start:config.device_height/2-50, end:config.device_height/2+50}
+  let randomBottom= {start:config.device_height * 0.85 - 50, end:config.device_height * 0.85 + 10}
+
+  function randomScrollDown () {
+    automator.randomScrollDown(randomBottom.start, randomBottom.end, randomTop.start, randomTop.end)
   }
 
-  this.answerQuestion = function () {
-    LogFloaty.pushLog('查找答题')
-    let toAnswer = widgetUtils.widgetGetOne('去答题', 2000)
+  function randomScrollUp (isFast) {
+    automator.randomScrollUp(randomTop.start, randomTop.end, randomBottom.start, randomBottom.end,isFast)
+  }
+
+  function scrollUpTop () {
+    let limit = 5
+    do {
+      randomScrollUp(true)
+    } while (limit-- > 0)
+  }
+
+  this.doDailyTasks = function () {
+    if (!this.isInTaskUI()) {
+      LogFloaty.pushLog('未打开每日任务界面')
+      return false
+    }
+    
+    LogFloaty.pushLog('执行每日任务')
+
+    let limit = 10
+    while (!widgetUtils.widgetCheck('完成任务后会获赠饲料.*', 1000) && limit-- > 0) {
+        randomScrollDown()
+        sleep(1000)
+    }
+
+    let taskInfos = [
+      {btnRegex:'去答题', tasks:[
+        {taskType:'answerQuestion',titleRegex:'.*'},
+      ]},
+      {btnRegex:'去喂鱼', tasks:[
+        {taskType:'feedFish',titleRegex:'去鲸探喂鱼.*'},
+      ]},
+      {btnRegex:'去完成', tasks:[
+        {taskType:'browse',titleRegex:'庄园小视频',timeout:20,needScroll:false},
+        {taskType:'browse',titleRegex:'去杂货铺逛一逛',timeout:15,needScroll:true},
+        {taskType:'browse',titleRegex:'逛一逛.*助农专场',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'去支付宝会员签到',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'去神奇海洋逛一逛',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'.*农货.*',timeout:15,needScroll:true},
+        {taskType:'browse',titleRegex:'.*芝麻.*',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'逛逛花呗.*',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'.*限时.*',timeout:3,needScroll:false},
+
+        {taskType:'app',titleRegex:'去逛一逛淘宝视频',timeout:20,needScroll:false},
+        {taskType:'app',titleRegex:'去逛一逛淘金币小镇',timeout:10,needScroll:false},
+        {taskType:'app',titleRegex:'去闲鱼逛一逛',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'去一淘APP逛逛',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'去点淘逛一逛',timeout:20,needScroll:false},
+        {taskType:'app',titleRegex:'去淘宝签到逛一逛',timeout:10,needScroll:false},
+
+        {taskType:'luckyDraw',titleRegex:'.*抽抽乐.*'},
+        {taskType:'farmFertilize',titleRegex:'去芭芭农场.*'},
+        {taskType:'doCook',titleRegex:'小鸡厨房.*'},
+        {taskType:'doChickenPlay',titleRegex:'去小鸡乐园.*'},
+      ]},
+    ]
+    
+    // 雇佣小鸡
+    this.hireChicken()
+  
+    let hasTask = false
+    do {
+      hasTask = false
+
+      // 其他任务
+      for (let i = 0; i < taskInfos.length; i++) {
+        let taskInfo = taskInfos[i]
+        let btns = widgetUtils.widgetGetAll(taskInfo.btnRegex, 3000)
+        if (btns && btns.length > 0) {
+          btns.forEach(btn => {
+            let titleObj = commonFunctions.getTaskTitleObj(btn)
+            if (titleObj) {
+              let titleText = titleObj.text()
+              LogFloaty.pushLog('发现任务：'+titleText)
+              for (let j = 0; j < taskInfo.tasks.length; j++) {
+                let task = taskInfo.tasks[j]
+                if (titleText.match(task.titleRegex)) {
+                  LogFloaty.pushLog('开始执行任务：'+titleText)
+                  if (task.taskType == 'browse') {
+                    hasTask = this.doCommonTask(titleText, btn, task.timeout, task.needScroll) || hasTask
+                  } else if (task.taskType == 'app') {
+                    hasTask = this.doCommonTask(titleText, btn, task.timeout, task.needScroll) || hasTask
+                  } else {
+                    hasTask = this.doSpecialTask(task.taskType, titleObj, btn) || hasTask
+                  }
+                  this.backToTaskUI()
+                  break
+                }
+              }
+            }
+          })
+        }
+      }
+    } while (hasTask && this.isInTaskUI())
+    scrollUpTop()
+  }
+
+  this.answerQuestion = function (titleObj,entryBtn) {
     let ai_type = config.ai_type || 'kimi'
     let kimi_api_key = config.kimi_api_key
     let chatgml_api_key = config.chatgml_api_key
-    if (toAnswer) {
-      toAnswer.click()
+    let key = ai_type === 'kimi' ? kimi_api_key : chatgml_api_key
+    if (!key) {
+      LogFloaty.pushLog('推荐去KIMI开放平台申请API Key并在可视化配置中进行配置')
+      LogFloaty.pushLog('否则免费接口这个智障AI经常性答错')
+    }
+  
+    let result = false
+    if (entryBtn) {
+      LogFloaty.pushLog('等待进入 '+titleObj.text())
+      entryBtn.click()
+      sleep(3000)
+      widgetUtils.widgetWaiting('题目来源.*',null, 3000)
       sleep(1000)
-      widgetUtils.widgetWaiting('题目来源.*')
-      sleep(1000)
-      let key = ai_type === 'kimi' ? kimi_api_key : chatgml_api_key
-      if (!key) {
-        LogFloaty.pushLog('推荐去KIMI开放平台申请API Key并在可视化配置中进行配置')
-        LogFloaty.pushLog('否则免费接口这个智障AI经常性答错')
-      }
       let result = AiUtil.getQuestionInfo(ai_type, key)
       if (result) {
         LogFloaty.pushLog('答案解释：' + result.describe)
         LogFloaty.pushLog('答案坐标：' + JSON.stringify(result.target))
-        automator.click(result.target.x, result.target.y)
+        automator.clickPointRandom(result.target.x, result.target.y)
       }
       sleep(1000)
-      // TODO 随机答题
       automator.back()
-    } else {
-      LogFloaty.pushWarningLog('未找到答题入口')
+      sleep(1000)
     }
+    return !!result
   }
 
-  this.watchVideo = function () {
-    LogFloaty.pushLog('查找看视频')
-    let videoTitle = widgetUtils.widgetGetOne('庄园小视频', 2000)
-    if (videoTitle) {
-      let btnText = videoTitle.parent().child(2).text()
-      if (btnText === '去完成') {
-        videoTitle.parent().child(2).click()
-        sleep(1000)
-        LogFloaty.pushLog('看视频 等待倒计时结束')
-        let limit = 20
-        while (limit-- > 0) {
-          sleep(1000)
-          LogFloaty.replaceLastLog('看视频 等待倒计时结束 剩余：' + limit + 's')
+  this.luckyDraw = function (titleObj,entryBtn) {
+    //抽奖一次并返回奖品信息
+    let luckyDrawOnce = function () {
+      debugInfo('抽抽乐 抽奖一次')  
+      let clickBtn = widgetUtils.widgetGetOne('还剩\\d+次机会',2000)
+      if (clickBtn) {
+        let drawTimes = new RegExp('还剩(\\d+)次机会').exec(clickBtn.text())[1]
+        if (drawTimes > 0) {
+          debugInfo('抽奖还有' + drawTimes + '次机会')
+        } else {
+          debugInfo('抽奖机会用完啦')
+          return
         }
-        automator.back()
-      } else {
-        LogFloaty.pushLog('今日视频已观看：' + btnText)
-      }
-    } else {
-      LogFloaty.pushWarningLog('未找到看视频入口')
-    }
-  }
-
-  this.browseAds = function () {
-    LogFloaty.pushLog('准备逛杂货铺')
-
-    let adsTitle = widgetUtils.widgetGetOne('去杂货铺逛一逛', 2000)
-    if (adsTitle) {
-      let btnText = adsTitle.parent().child(2).text()
-      if (btnText === '去完成') {
-        adsTitle.parent().child(2).click()
-        sleep(1000)
-        LogFloaty.pushLog('去杂货铺逛一逛 等待倒计时结束')
-        let limit = 15
-        while (limit-- > 0) {
-          sleep(1000)
-          LogFloaty.replaceLastLog('去杂货铺逛一逛 等待倒计时结束 剩余：' + limit + 's')
-          if (limit % 2 == 0) {
-            automator.randomScrollDown()
-          }
+        automator.clickRandom(clickBtn)
+        debugInfo('抽抽乐 等待抽奖结束')
+        sleep(3000)
+        debugInfo('开始识别抽奖结果')
+        let luckyItem= widgetUtils.widgetGetOne('.*\\(\\d+.*\\)',2000)
+        let luckyResult = null
+        if (luckyItem) {
+          luckyResult = new RegExp('(.*)\\((\\d+)(.*)\\)').exec(luckyItem.text())
+          debugInfo(['抽抽乐 获得：{} {} {}',luckyResult[1], luckyResult[2], luckyResult[3]])
+          luckyResult[0] = drawTimes - 1
         }
-        automator.back()
-      } else {
-        LogFloaty.pushLog('今日广告逛完：' + btnText)
+        let confirmBtn = widgetUtils.widgetGetOne('知道啦|立即换装',2000)
+        if (confirmBtn) {
+          automator.clickRandom(confirmBtn)
+        }
+        sleep(1000)
+        return luckyResult
       }
-    } else {
-      LogFloaty.pushWarningLog('未找到去杂货铺逛一逛入口')
     }
-  }
-
-  this.luckyDraw = function () {
+    
     LogFloaty.pushLog('准备抽奖')
+    let result = false
+    if (titleObj) {
+      titleObj.click()
+      sleep(3000)
 
-    let luckyTitle = widgetUtils.widgetGetOne('.*抽抽乐.*', 2000)
-    if (luckyTitle) {
-      let btnText = luckyTitle.parent().child(2).text()
-      if (btnText === '去完成') {
-        luckyTitle.parent().child(2).click()
-        sleep(1000)
-        LogFloaty.pushLog('抽抽乐 查找领取')
-        let collect = widgetUtils.widgetGetOne('领取')
-        if (collect) {
-          automator.clickCenter(collect)
-          sleep(1000)
-          let clickBtn = widgetUtils.widgetGetOne('还剩\\d次机会')
-          if (clickBtn) {
-            automator.clickCenter(clickBtn)
-            LogFloaty.pushLog('抽抽乐 等待抽奖结束')
-            sleep(3000)
-          }
+      LogFloaty.pushLog('抽抽乐 完成任务')
+      let hasTask = false
+      do {
+        hasTask = false
+        let btns = widgetUtils.widgetGetAll('去完成', 1000)
+        if (btns && btns.length > 0) {
+          btns.forEach(btn => {
+            let titleObj = commonFunctions.getTaskTitleObj(btn)
+            if (titleObj) {
+              let titleText = titleObj.text()
+              LogFloaty.pushLog('发现任务：'+titleText)
+              if (titleText.match('去杂货铺逛一逛.*')) {
+                hasTask = this.doBrowseTask(titleText, btn, 15, true) || hasTask
+              } else if (titleText.match('试用.*')) {
+                hasTask = this.doBrowseTask(titleText, btn, 3, false) || hasTask
+              }
+            }
+          })
         }
-        automator.back()
-      } else {
-        LogFloaty.pushLog('今日抽奖已完成：' + btnText)
-      }
-    } else {
-      LogFloaty.pushWarningLog('未找到抽抽乐入口')
+
+        LogFloaty.pushLog('抽抽乐 查找领取')
+        let collects = widgetUtils.widgetGetAll('.*领取',2000)
+        if (collects&& collects.length > 0) {
+          hasTask = true
+          collects.forEach(collect => {
+            collect.click()
+            sleep(2000)
+          })
+        }
+      } while (hasTask)
+      
+      //抽奖直到次数用完
+      LogFloaty.pushLog('抽抽乐 抽奖')  
+      do {
+        // 抽奖一次
+        drawResult = luckyDrawOnce()
+        let drawTimes = drawResult? drawResult[0]:0
+        if (drawTimes <= 0) {
+          debugInfo('抽奖机会用完啦')
+          break
+        }
+      } while (true)
+        
+      result = true
+      automator.back()
+      sleep(1000)
     }
+    return result
   }
 
-  this.farmFertilize = function () {
+  this.farmFertilize = function (titleObj,entryBtn) {
     LogFloaty.pushLog('准备施肥')
 
-    let farmTitle = widgetUtils.widgetGetOne('去芭芭农场.*', 2000)
-    if (farmTitle) {
-      let btnText = farmTitle.parent().child(2).text()
-      if (btnText === '去完成') {
-        farmTitle.parent().child(2).click()
-        sleep(1000)
-        LogFloaty.pushLog('等待进入芭芭农场')
-        widgetUtils.widgetWaiting('任务列表')
-        sleep(1000)
-        LogFloaty.pushLog('查找 施肥 按钮')
-        let result = localOcr.recognizeWithBounds(commonFunctions.captureScreen(), null, '肥料.*\\d+')
-        if (result && result.length > 0) {
-          let bounds = result[0].bounds
-          LogFloaty.pushLog('施肥按钮位置：' + JSON.stringify({ x: bounds.centerX(), y: bounds.centerY() }))
-          automator.click(bounds.centerX(), bounds.centerY())
-        } else {
-          LogFloaty.pushLog('未找到施肥按钮')
+    let result = false
+    if (entryBtn) {
+      entryBtn.click()
+      LogFloaty.pushLog('等待进入芭芭农场')
+      sleep(8000)
+      LogFloaty.pushLog('查找 施肥 按钮')
+      let fertilizeBtn = null
+      let taskBtn = widgetUtils.widgetGetOne('^任务列表$', 3000)
+      if (taskBtn) {
+        fertilizeBtn = {x:config.device_width/2, y:taskBtn.bounds().centerY()}
+      } else {
+        taskBtn = localOcr.recognizeWithBounds(commonFunctions.captureScreen(), null, '^施肥$')
+        if (taskBtn && taskBtn.length > 0) {
+          fertilizeBtn = {x:taskBtn[0].bounds().centerX(),y:taskBtn[0].bounds().centerY()}
         }
-        automator.back()
-      } else {
-        LogFloaty.pushLog('今日施肥已完成：' + btnText)
       }
+      if (fertilizeBtn) {
+        automator.clickPointRandom(fertilizeBtn.x, fertilizeBtn.y)
+        sleep(5000)
+      } else {
+        LogFloaty.pushWarningLog('未找到施肥按钮')
+      }
+      result = !!fertilizeBtn && this.backToTaskUI()
+    }
+    return result
+  }
+
+  //小鸡厨房
+  this.doCook = function (titleObj,entryBtn) {
+    LogFloaty.pushLog('准备小鸡厨房')
+
+    let result = false
+    if (entryBtn) {
+      entryBtn.click()
+      LogFloaty.pushLog('等待进入小鸡厨房')
+      sleep(3000)
+      LogFloaty.pushLog('查找 领食材和做美食 按钮')
+      let ocrResult = localOcr.recognizeWithBounds(commonFunctions.captureScreen(), null, '^.*食材|做美食|\\d+肥料$')
+      if (ocrResult && ocrResult.length >= 0) {
+        let cookBtn = ocrResult.filter(item => item.label.match(/做美食/) && item.bounds.top>config.device_height/4*3)
+        if (cookBtn && cookBtn.length > 0) {
+          cookBtn = cookBtn[0].bounds
+          debugInfo('获取领食材按钮并依次点击')
+          let getBtns = ocrResult.filter(item => item.label.match(/^食材|领今日食材$/))
+          if (getBtns && getBtns.length > 0) {
+            getBtns.forEach(item => {
+              let bounds = item.bounds
+              automator.clickPointRandom(bounds.centerX(), bounds.centerY())
+              sleep(2000)
+            })
+          }
+          debugInfo('做美食直到食材不足')
+          while (cookBtn && !manorRunner.isSleep) {
+            automator.clickPointRandom(cookBtn.centerX(), cookBtn.centerY())
+            sleep(5000)
+            let resultText = widgetUtils.widgetGetOne('制作成功|食材不够啦',5000)
+            let closeBtn = widgetUtils.widgetGetOne('关闭',2000)
+            if (closeBtn) {
+              automator.clickRandom(closeBtn)
+              sleep(2000)
+            }
+            if (resultText && resultText.text().match(/食材不够啦/)) {
+              break
+            }
+          }
+          result = true
+        }
+        debugInfo('领取厨余肥料')
+        let collectBtn = ocrResult.filter(item => item.label.match(/\d+肥料/))
+        if (collectBtn && collectBtn.length > 0) {
+          collectBtn = collectBtn[0].bounds
+          automator.clickPointRandom(collectBtn.centerX(), collectBtn.centerY())
+          sleep(2000)
+        }
+      } else {
+        LogFloaty.pushLog('未找到做美食按钮')
+      }
+      result = result && this.backToTaskUI()
+    }
+    return result
+  }
+  
+  //小鸡乐园
+  this.doChickenPlay = function (titleObj,entryBtn) {
+    LogFloaty.pushLog('准备小鸡乐园')
+    let result = false
+    if (entryBtn) {
+      entryBtn.click()
+      LogFloaty.pushLog('等待进入小鸡乐园')
+      if (widgetUtils.widgetWaiting('在乐园玩一玩，得宝箱','打开乐园界面',5000)) {
+        let titleText = widgetUtils.widgetGetOne('星星球',3000)
+        if (titleText) {
+          let clickBtn = titleText.parent().child(3)
+          if (clickBtn) {
+            clickBtn.click()
+            sleep(5000)
+            let starBallPlayer = require('../unit/星星球.js')
+            result = starBallPlayer.exec()
+            debugInfo('星星球完成')
+
+            automator.back()
+            sleep(2000)
+
+            let confirmBtn = null
+            while (confirmBtn = widgetUtils.widgetGetOne('去开宝箱.*|继续开宝箱.*',3000)) {
+              automator.clickRandom(confirmBtn)
+              sleep(5000)
+            }
+            confirmBtn = widgetUtils.widgetGetOne('去玩一玩.*',3000)
+            if (confirmBtn) {
+              automator.clickRandom(confirmBtn)
+              sleep(1000)
+            }
+            //result = true
+          }
+        }
+      }
+      let closeBtn = widgetUtils.widgetGetOne('关闭',3000,null,null,m => m.filter(uo=>uo.bounds().top>300))
+      if (closeBtn) {
+        automator.clickRandom(closeBtn)
+        sleep(1000)
+      }
+      LogFloaty.pushLog('小鸡乐园完成，重新打开领饲料界面')
+      if (this.collectEntry) {
+        automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
+        sleep(3000)
+      }
+    }
+    return result
+  }
+  
+  //喂鱼任务
+  this.feedFish = function (titleObj,entryBtn) {
+    LogFloaty.pushLog('准备鲸探喂鱼')
+    let result = false
+    if (entryBtn) {
+      entryBtn.click()
+      LogFloaty.pushLog('等待进入喂鱼界面')
+      if (widgetUtils.widgetWaiting('放生池容量.*', '打开喂鱼界面', 8000)) {
+        sleep(3000)
+        let feedBtn = widgetUtils.widgetGetOne('鱼食\\(\\d+/\\d+\\)',8000)
+        if (feedBtn){
+          automator.clickRandom(feedBtn.parent())
+          sleep(2000)
+        }
+        feedBtn = widgetUtils.widgetGetOne('喂鱼',3000)
+        if (feedBtn){
+          automator.clickRandom(feedBtn)
+          sleep(2000)
+        }
+        LogFloaty.pushLog('喂鱼完成，返回主界面')
+        automator.back()
+        sleep(2000)
+        result = true
+      }
+    }
+    return result
+  }
+
+  this.hireChicken = function() {
+    LogFloaty.pushLog('准备雇佣小鸡')
+
+    //当前工作小鸡满，直接返回
+    if (commonFunctions.getWorkerCount()==2) {
+      logUtils.debugInfo('当前工作小鸡满，不雇佣小鸡直接返回')
+      return false
+    }
+
+    let result = false
+    let titleObj = widgetUtils.widgetGetOne('雇佣小鸡拿饲料', 3000)
+    let entryBtn = titleObj
+    if (entryBtn) {
+      entryBtn.click()
+      LogFloaty.pushLog('等待进入雇佣小鸡窗口')
+      sleep(3000)
+      let hireRegex = '当前还可雇佣(\\d+)只小鸡'
+      let hireText = widgetUtils.widgetGetOne(hireRegex,5000)
+      if (hireText) {
+        let hireCount = new RegExp(hireRegex).exec(hireText.text())[1]
+        LogFloaty.pushLog('可雇佣小鸡：' + hireCount)
+        for(let i = 0; i < hireCount; i++){
+          let hireBtn = widgetUtils.widgetGetOne('雇佣并通知')
+          if (hireBtn) {
+            automator.clickRandom(hireBtn)
+            sleep(1000)
+          }
+        }
+      }
+      automator.back()
+      result = !!hireText
+    }
+    return result
+  }
+
+  /**
+   * 获取当前界面是否在项目界面
+   */
+  this.isInProjectUI = function (projectCode, timeout) {
+    timeout = timeout || 2000
+    return widgetUtils.idWaiting('wrapper-barrage', '蚂蚁庄园', timeout)
+  }
+
+  /**
+   * 获取当前界面是否在任务界面
+   */
+  this.isInTaskUI = function (projectCode, timeout) {
+    timeout = timeout || 2000
+    return widgetUtils.widgetWaiting('庄园小课堂', '任务列表', timeout)
+  }
+
+  this.startApp = function (projectCode) {
+    manorRunner.launchApp()
+  }
+
+  this.openTaskWindow = function (projectCode) {
+    if (this.collectEntry) {
+      LogFloaty.pushLog('已找到领饲料入口')
+      automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
+      sleep(3000)
+      return this.isInTaskUI()
     } else {
-      LogFloaty.pushWarningLog('未找到施肥入口')
+      LogFloaty.pushWarningLog('未能找到领饲料入口')
+      return false
     }
   }
 
-  this.browseHelpFarm = function () {
-    LogFloaty.pushLog('准备逛一逛助农专场')
-    // let title = widgetUtils.widgetGetOne('逛一逛.*助农专场', 2000)
-    // if (title) {
-    //   let btnText = title.parent().child(2).text()
-    //   if (btnText === '去完成') {
-    //     title.parent().child(2).click()
-    //     sleep(1000)
-    //     LogFloaty.pushLog('等待进入助农专场')
-    //     widgetUtils.widgetWaiting('点击或滑动浏览得肥料')
-    //     sleep(1000)
-    //     LogFloaty.pushLog('啥也不用干 直接返回')
-    //     automator.back()
-    //   } else {
-    //     LogFloaty.pushLog('今日逛一逛助农专场已完成：' + btnText)
-    //   }
-    // } else {
-    //   LogFloaty.pushWarningLog('未找到逛一逛助农专场入口')
-    // }
-    findAndOpenTaskPage('逛一逛.*助农专场', null, result => {
-      let enter = result.enter
-      let btnText = result.btnText
-      if (enter) {
-        LogFloaty.pushLog('等待进入助农专场')
-        widgetUtils.widgetWaiting('点击或滑动浏览得肥料')
-        sleep(1000)
-        LogFloaty.pushLog('啥也不用干 直接返回')
-        automator.back()
-      } else {
-        LogFloaty.pushLog('今日逛一逛助农专场已完成：' + btnText)
+  this.backToTaskUI = function (projectCode) {
+    warnInfo('检查是否在任务界面，不在的话返回，尝试两次')
+    let backResult = false
+    let waitCount = 2
+    while (!(backResult=this.isInTaskUI(projectCode,5000)) && waitCount-->0) {
+      automator.back()
+      sleep(1000)
+    }
+  
+    if (backResult) {
+      sleep(2000)
+      return true
+    }
+    
+    warnInfo(['返回失败，重新尝试打开任务界面'])
+    if (!this.isInProjectUI(projectCode)) {
+      warnInfo(['不在项目界面，重新尝试打开项目'])
+      this.startApp(projectCode)
+    }
+  
+    if (!this.isInProjectUI(projectCode)) {
+      warnInfo(['打开项目失败，5分钟后重新尝试'])
+      commonFunctions.setUpAutoStart(5)
+      return false
+    }
+  
+    if(!this.isInTaskUI(projectCode)) {
+      if (!this.openTaskWindow(projectCode)) {
+        warnInfo(['打开任务界面失败，5分钟后重新尝试'])
+        commonFunctions.setUpAutoStart(5)
+        return false
       }
-    }, e => {
-      LogFloaty.pushWarningLog('未找到逛一逛助农专场入口: ' + e)
-    })
+    }
+    return true
   }
 
-  function findAndOpenTaskPage (titleRegex, btnText, callback, errorCallback) {
-    btnText = btnText || '去完成'
-    let title = widgetUtils.widgetGetOne(titleRegex, 2000)
-    if (title) {
-      let entryText = title.parent().child(2).text()
-      if (entryText === btnText) {
-        title.parent().child(2).click()
+  this.doBrowseTask = function (titleText, entryBtn, timeout, needScroll) {
+    if (!entryBtn) {
+      LogFloaty.pushLog('无入口按钮，跳过执行：'+titleText)
+      return false
+    }
+    titleText = titleText || entryBtn.text()
+    timeout = timeout || 15
+  
+    entryBtn.click()
+    sleep(1000)
+    LogFloaty.pushLog('等待进入 '+titleText+', 计时：'+timeout+', 滑动：'+needScroll)
+    sleep(2000);
+  
+    if (timeout) {
+      LogFloaty.pushLog(titleText+' 等待倒计时结束')
+      let limit = timeout
+      while (limit-- > 0) {
         sleep(1000)
-        return callback({ enter: true, btnText })
-      } else {
-        return callback({ enter: false, btnText: entryText })
+        LogFloaty.replaceLastLog(titleText+' 等待倒计时结束 剩余：' + limit + 's')
+        if (limit % 2 == 0 && needScroll) {
+          automator.randomScrollDown()
+        }
       }
     } else {
-      errorCallback('未能找到：' + titleRegex)
+      sleep(3000)
+      LogFloaty.pushLog('啥也不用干 直接返回')
     }
+    automator.back()
+    sleep(1000)
+    return true
+  }
+  
+  this.doVisitAppTask = function (titleText,entryBtn,timeout,needScroll) {
+    if (!commonFunctions.checkAppInstalledByName(titleText)) {
+      LogFloaty.pushLog('未安装应用，跳过执行：'+titleText)
+      return false
+    }
+    
+    currentRunning = commonFunctions.myCurrentPackage()
+    debugInfo('当前包名：'+currentRunning)
+    entryBtn.click()
+  
+    LogFloaty.pushLog('等待进入 '+titleText+', 计时：'+timeout+', 滑动：'+needScroll)
+    let waitCount = 10
+    while (currentRunning == commonFunctions.myCurrentPackage() && waitCount-- > 0) {
+      sleep(1000)
+    }
+    if (currentRunning == commonFunctions.myCurrentPackage()) {
+      LogFloaty.pushLog('进入失败，返回')
+      return false
+    }
+    //已进入目标应用，等待加载完成
+    sleep(5000)
+  
+    //根据需要等待一段时间进行浏览
+    if (timeout) {
+      LogFloaty.pushLog(titleText+' 等待倒计时结束')
+      let limit = timeout / 2
+      while (limit-- > 0) {
+        //检查是否有弹窗
+        let popupCancelBtn = widgetUtils.widgetGetOne("^取消|忽略|关闭|拒绝$", 1000, false, false, m => m.boundsInside(0,  config.device_height * 0.2, config.device_width, config.device_height))
+        if (popupCancelBtn) {
+          debugInfo('找到了弹窗取消按钮')
+          automator.clickRandom(popupCancelBtn)
+          sleep(1000)
+        }
+        //检查是否有验证窗口，有则等待直到消失
+        commonFunctions.waitForTBVerify()
+  
+        sleep(1000)
+        LogFloaty.replaceLastLog(titleText+' 等待倒计时结束 剩余：' + limit + 's')
+        if (limit % 2 == 0 && needScroll) {
+          automator.randomScrollDown()
+        }
+      }
+    } else {
+      sleep(3000)
+      LogFloaty.pushLog('啥也不用干 直接返回')
+    }
+    commonFunctions.minimize()
+    sleep(1000)
+    if (currentRunning != commonFunctions.myCurrentPackage()) {
+      LogFloaty.pushLog('未返回原应用，直接打开 '+ currentRunning)
+      app.launch(currentRunning);
+      sleep(3000)
+    }
+
+    automator.back()
+    sleep(1000)
+    return true
   }
 
+  this.doCommonTask = function (titleText, entryBtn, timeout, needScroll) {
+    if (!commonFunctions.checkAppInstalledByName(titleText)) {
+      LogFloaty.pushLog('未安装应用，跳过执行：'+titleText)
+      return false
+    }
+    
+    if (!entryBtn) {
+      LogFloaty.pushLog('无入口按钮，跳过执行：'+titleText)
+      return false
+    }
+    titleText = titleText || entryBtn.text()
+    timeout = timeout || 15
+    let taskType = 'browse'
+  
+    currentRunning = commonFunctions.myCurrentPackage()
+    debugInfo('当前包名：'+currentRunning)
+    
+    entryBtn.click()
+    LogFloaty.pushLog('等待进入 '+titleText+', 计时：'+timeout+', 滑动：'+needScroll)
+    sleep(5000)
+
+    if (currentRunning != commonFunctions.myCurrentPackage()) {
+      taskType = 'visitapp'
+      //已进入目标应用，等待加载完成
+      sleep(5000)
+    } else if (this.isInTaskUI()) {
+      LogFloaty.pushLog('进入任务失败：'+titleText)
+      return false
+    }
+  
+    //检查是否有验证窗口，有则等待直到消失
+    commonFunctions.waitForTBVerify()
+
+    //根据需要等待一段时间进行浏览
+    if (timeout) {
+      LogFloaty.pushLog(titleText+' 等待倒计时结束')
+      let limit = timeout
+      while (limit-- > 0) {
+        //检查是否有弹窗
+        let popupCancelBtn = widgetUtils.widgetGetOne("^取消|忽略|关闭|拒绝$", 1000, false, false, m => m.boundsInside(0,  config.device_height * 0.2, config.device_width, config.device_height))
+        if (popupCancelBtn) {
+          debugInfo('找到了弹窗取消按钮')
+          automator.clickRandom(popupCancelBtn)
+        }
+  
+        LogFloaty.replaceLastLog(titleText+' 等待倒计时结束 剩余：' + limit + 's')
+        if (limit % 2 == 0 && needScroll) {
+          automator.scrollUpAndDown()
+          sleep(100)
+        } else {
+          sleep(1000)
+        }
+      }
+    } else {
+      sleep(3000)
+      LogFloaty.pushLog('啥也不用干 直接返回')
+    }
+    if (taskType == 'visitapp') {
+      commonFunctions.minimize()
+      sleep(1000)
+      if (currentRunning != commonFunctions.myCurrentPackage()) {
+        LogFloaty.pushLog('未返回原应用，直接打开 '+ currentRunning)
+        app.launch(currentRunning);
+        sleep(3000)
+      }
+    }
+
+    automator.back()
+    sleep(1000)
+    return true
+  }
+
+  this.doSpecialTask = function (action,titleObj,entryBtn) {
+    if (!titleObj||!entryBtn) {
+      return false
+    }
+    switch(action) {
+      case 'answerQuestion':
+        return this.answerQuestion(titleObj,entryBtn)
+      case 'luckyDraw':
+        return this.luckyDraw(titleObj,entryBtn)
+      case 'farmFertilize':
+        return this.farmFertilize(titleObj,entryBtn)
+      case 'doCook':
+        return this.doCook(titleObj,entryBtn)
+      case 'doChickenPlay':
+        return this.doChickenPlay(titleObj,entryBtn)
+      case 'feedFish':
+        return this.feedFish(titleObj,entryBtn)
+      default:
+        return false
+    }
+  }
+  
   function collectCurrentVisible () {
     auto.clearCache && auto.clearCache()
     let visiableCollect = widgetUtils.widgetGetAll(collectBtnContetRegex) || []
     let originList = visiableCollect
     if (visiableCollect.length > 0) {
-      visiableCollect = visiableCollect.filter(v => v.visibleToUser() && checkIsValid(v))
+      visiableCollect = visiableCollect.filter(v => commonFunctions.isObjectInScreen(v) && checkIsValid(v))
     }
     if (visiableCollect.length > 0) {
       _this.collected = true
       logUtils.debugInfo(['点击领取'])
-      automator.clickCenter(visiableCollect[0])
+      // automator.clickRandom(visiableCollect[0])
+      visiableCollect[0].click()
       sleep(500)
       let full = widgetUtils.widgetGetOne(config.fodder_config.feed_package_full || '饲料袋.*满.*|知道了', 1000)
       if (full) {
         LogFloaty.pushWarningLog('饲料袋已满')
         logUtils.warnInfo(['饲料袋已满'], true)
         _this.food_is_full = true
-        let confirmBtn = widgetUtils.widgetGetOne('知道了', 1000)
+        let confirmBtn = widgetUtils.widgetGetOne('确认|知道了', 1000)
         if (confirmBtn) {
-          automator.clickCenter(confirmBtn)
+          // if (confirmBtn.text()!='知道了')
+          let closeBtn = confirmBtn.parent().parent().child(0).child(0)
+          automator.clickRandom(closeBtn)
           sleep(1000)
         }
         return false
@@ -368,14 +845,14 @@ function Collector () {
     LogFloaty.pushWarningLog('无可领取饲料')
     logUtils.warnInfo(['无可领取饲料'], true)
     if (YoloDetection.enabled) {
-      let result = YoloDetection.forward(commonFunctions.captureScreen(), { confidence: 0.7, labelRegex: 'close_btn' })
+      let result = YoloDetection.forward(commonFunctions.captureScreen(), { confidence: 0.7, labelRegex: 'close_btn|confirm_btn' })
       if (result && result.length > 0) {
         LogFloaty.pushLog('通过yolo找到了关闭按钮')
-        automator.click(result[0].x, result[0].y)
+        automator.clickPointRandom(result[0].centerX, result[0].centerY)
       } else {
         LogFloaty.pushWarningLog('无法通过yolo查找到关闭按钮')
         logUtils.warnInfo(['无法通过yolo查找到关闭按钮'])
-        automator.back()
+        automator.clickPointRandom(150,300)
       }
     } else {
       let screen = commonFunctions.captureScreen()
@@ -388,7 +865,7 @@ function Collector () {
           this.useSimpleForCloseCollect = false
         }
         if (matchResult) {
-          automator.click(matchResult.centerX(), matchResult.centerY())
+          automator.clickPointRandom(matchResult.centerX(), matchResult.centerY())
           if (!this.useSimpleForCloseCollect) {
             let template_img_for_close_collect = images.toBase64(images.clip(originScreen, matchResult.left, matchResult.top, matchResult.width(), matchResult.height()))
             config.overwrite('fodder.close_interval', template_img_for_close_collect)
@@ -448,7 +925,7 @@ function checkOcrText (regex, target, screen) {
     let text = localOcr.recognize(screen, region)
     if (text) {
       text = text.replace(/\n/g, '')
-      return new RegExp(regex).test(regex)
+      return new RegExp(regex).test(text)
     }
   }
   return false

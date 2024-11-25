@@ -11,6 +11,7 @@ let YoloDetection = singletonRequire('YoloDetectionUtil')
 let TouchController = require('../lib/TouchController.js')
 let logFloaty = singletonRequire('LogFloaty')
 logFloaty.fontSize = 30
+logFloaty.pushLog('脚本启动')
 let warningFloaty = singletonRequire('WarningFloaty')
 config.debuging = true
 let SCALE_RATE = config.scaleRate
@@ -91,7 +92,7 @@ let btns = [
           warningFloaty.addRectangle(r.label + ': ' + r.confidence.toFixed(2), [r.x, r.y, r.width, r.height])
         })
       }
-      logFloaty.pushLog('检测耗时：' + (new Date() - start) + 'ms')
+      logFloaty.replaceLastLog('检测耗时：' + (new Date() - start) + 'ms')
     }
   },
   {

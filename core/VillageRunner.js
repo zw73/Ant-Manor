@@ -13,6 +13,9 @@ let WarningFloaty = singletonRequire('WarningFloaty')
 let LogFloaty = singletonRequire('LogFloaty')
 let yoloTrainHelper = singletonRequire('YoloTrainHelper')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
+let AiUtil = require('../lib/AIRequestUtil.js')
+let taskUtil = singletonRequire('../lib/TaskUtil.js')
+
 FloatyInstance.enableLog()
 
 let villageConfig = config.village_config
@@ -26,19 +29,25 @@ function VillageRunner () {
   // 当前一摆摊的摊位
   let currentBoothSetted = 0
   this.exec = function () {
+    _this.nextVisitTime = null
     try {
-      openMyVillage()
+      if (!this.openMyVillage()) {
+        warnInfo(['打开项目失败，5分钟后重新尝试'])
+        commonFunctions.setUpAutoStart(5)
+        return false
+      }
       sleep(1000)
       collectMyCoin()
-      sleep(500)
-      // 加速产币
-      speedAward()
       sleep(500)
       checkAnyEmptyBooth()
       waitForLoading()
       checkMyBooth()
-      // 设置2小时后启动
-      commonFunctions.setUpAutoStart(villageConfig.interval_time || 120)
+      waitForLoading()
+      // 加速产币
+      this.speedAward()
+
+      debugInfo(['设置 {} 分钟后启动', _this.nextVisitTime || villageConfig.interval_time || 120])
+      commonFunctions.setUpAutoStart(_this.nextVisitTime || villageConfig.interval_time || 120)
     } catch (e) {
       errorInfo('执行异常 五分钟后重试' + e)
       commonFunctions.setUpAutoStart(5)
@@ -46,35 +55,48 @@ function VillageRunner () {
     }
   }
 
-  function openMyVillage (reopen, retry) {
+  this.openMyVillage = function (reopen, retry) {
     LogFloaty.pushLog('准备打开蚂蚁新村')
     app.startActivity({
       action: 'VIEW',
       data: 'alipays://platformapi/startapp?appId=68687809',
       packageName: 'com.eg.android.AlipayGphone'
     })
+    sleep(500)
     FloatyInstance.setFloatyInfo({ x: config.device_width / 2, y: config.device_height / 2 }, "查找是否有'打开'对话框")
-    let confirm = widgetUtils.widgetGetOne(/^打开$/, 1000)
-    if (confirm) {
-      automator.clickCenter(confirm)
-    }
-    sleep(1000)
-    if (openAlipayMultiLogin(reopen)) {
-      openMyVillage(true)
+    let startTime = new Date().getTime()
+    while (new Date().getTime() - startTime < 30000) {
+      let confirm = widgetUtils.widgetGetOne(/^打开$/, 1000)
+      if (confirm) {
+        automator.clickRandom(confirm)
+        sleep(1000)
+      }
+        
+      if (openAlipayMultiLogin(reopen)) {
+        return this.openMyVillage(true)
+      }
+  
+      if (config.is_alipay_locked) {
+        alipayUnlocker.unlockAlipay()
+        sleep(1000)
+      }
+
+      if (waitForLoading(2000)) {
+        FloatyInstance.setFloatyText('已进入蚂蚁新村')
+        return true
+      }
+
+      sleep(1000)
     }
 
-    if (config.is_alipay_locked) {
-      sleep(1000)
-      alipayUnlocker.unlockAlipay()
-    }
-    sleep(1000)
-    if (!waitForLoading() && !retry) {
+    if (!retry) {
       LogFloaty.pushWarningLog('打开蚂蚁新村失败，重新打开')
-      commonFunctions.minimize()
       killAlipay()
       sleep(3000)
-      openMyVillage(false, true)
+      return this.openMyVillage(false, true)
     }
+    errorInfo('打开蚂蚁新村失败')
+    return false
   }
 
   function openAlipayMultiLogin (reopen) {
@@ -82,7 +104,10 @@ function VillageRunner () {
       debugInfo(['已开启多设备自动登录检测，检查是否有 进入支付宝 按钮'])
       let entryBtn = widgetUtils.widgetGetOne(/^进入支付宝$/, 1000)
       if (entryBtn) {
-        automator.clickCenter(entryBtn)
+        FloatyInstance.setFloatyText('其他设备正在登录，等待5分钟后进入')
+        commonFunctions.waitForAction(300, '等待进入支付宝')
+        unlocker && unlocker.exec()
+        automator.clickRandom(entryBtn)
         sleep(1000)
         return true
       } else {
@@ -90,43 +115,108 @@ function VillageRunner () {
       }
     }
   }
+
   function collectMyCoin () {
     let findByYolo = false
     if (YoloDetection.enabled) {
       let collectCoin = yoloCheck('收集金币', { confidence: 0.7, labelRegex: 'collect_coin' })
       if (collectCoin) {
-        automator.click(collectCoin.x, collectCoin.y)
-        findByYolo = false
+        automator.clickPointRandom(collectCoin.x, collectCoin.y)
+        findByYolo = true
       }
     }
     if (!findByYolo) {
       // 自动点击自己的能量豆
-      automator.click(villageConfig.village_reward_click_x, villageConfig.village_reward_click_y)
+      automator.clickPointRandom(villageConfig.village_reward_click_x, villageConfig.village_reward_click_y)
+    }
+
+    let point = null, screen = null, ocrResult = null
+    if (localOcr.enabled) {
+      screen = commonFunctions.captureScreen()
+      //识别肥料袋并点击
+      debugInfo(['尝试OCR识别 肥料袋'])
+      ocrResult = localOcr.recognizeWithBounds(screen, null, '^肥$')
+      if (ocrResult && ocrResult.length > 0) {
+        point = ocrResult[0].bounds
+        FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '找到了肥料袋')
+        sleep(500)
+        automator.clickPointRandom(point.centerX(), point.centerY())
+        sleep(1000)
+      }
+
+        //识别小摊结余并点击
+      debugInfo(['尝试OCR识别 小摊结余'])
+      point = null
+      ocrResult = localOcr.recognizeWithBounds(screen, null, '小摊结余')
+      if (ocrResult && ocrResult.length > 0) {
+        point = ocrResult[0].bounds
+      }
+      if (point) {
+        FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '找到了小摊结余按钮')
+        sleep(500)
+        automator.clickPointRandom(point.centerX(), point.centerY()-50)
+        sleep(2000)
+        //查找一键丢肥料按钮
+        let oneKeyBtn = widgetUtils.widgetGetOne(/^一键丢肥料.*/, 5000)
+        //点击一次丢肥料按钮
+        if (oneKeyBtn) {
+          debugInfo(['点击一次丢肥料按钮'])
+          automator.clickRandom(oneKeyBtn)
+          sleep(1000)
+          //等待确认丢肥料按钮出现并点击
+          let confirmBtn = widgetUtils.widgetGetOne(/^确认丢肥料$/, 2000)
+          if (confirmBtn) {
+            debugInfo(['点击确认丢肥料按钮'])
+            automator.clickRandom(confirmBtn)
+            sleep(1000)
+          }
+
+          let popupBound = oneKeyBtn.parent().parent().bounds()
+          findCloseButtonAndClick({x:popupBound.right-50, y:popupBound.top+30})
+        }
+      } else {
+        LogFloaty.pushWarningLog('未找到小摊结余')
+      }
     }
   }
+
+  /**
+   * 查找关闭按钮并点击
+   */
+  function findCloseButtonAndClick (defaultBtnPoint) {
+    const closeBtnBase64 = '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'
+    let point = null
+    if (point = openCvUtil.findByGrayBase64(captureScreen(), closeBtnBase64)) {
+      LogFloaty.pushLog('使用opencv和灰度图片找到关闭按钮')
+      automator.clickPointRandom(point.centerX(), point.centerY())
+    } else if (point = widgetUtils.widgetGetOne('关闭', 1000, false, false, m => m.boundsInside(0,  config.device_height * 0.2, config.device_width, config.device_height))) {
+      LogFloaty.pushLog('使用文字找到关闭按钮')
+      automator.clickRandom(point)
+    } else if (defaultBtnPoint) {
+      LogFloaty.pushLog('使用默认关闭按钮位置')
+      automator.clickPointRandom(defaultBtnPoint.x,defaultBtnPoint.y)
+    } else {
+      LogFloaty.pushLog('未找到关闭按钮位置，点击空白区域')
+      automator.clickPointRandom(config.device_width/4*3, config.device_height * 0.15)
+    }
+  }
+
   /**
    * 等待摆摊界面或者好友界面打开完成 寻找邮箱或其他标志物
    */
-  function waitForLoading () {
+  function waitForLoading (timeout) {
     if (config._mock_fail && Math.random() > 0.25 || config._fail_next) {
       config._fail_next = true
       return false
     }
     LogFloaty.pushLog('校验是否正确打开蚂蚁新村')
     if (YoloDetection.enabled) {
-      if (yoloWaitFor('界面校验', { confidence: 0.7, labelRegex: 'booth_btn|empty_booth' })) {
+      if (yoloWaitFor('界面校验', { confidence: 0.7, labelRegex: 'booth_btn|empty_booth|operation_booth|punish_btn|speedup' }, timeout)) {
         return true
       }
     }
     let screen = commonFunctions.captureScreen()
     let findPoint = openCvUtil.findByGrayBase64(screen, villageConfig.checking_mail_box)
-    // 等待五秒
-    let limit = 5
-    while (limit-- > 0 && !findPoint) {
-      sleep(1000)
-      screen = commonFunctions.captureScreen()
-      findPoint = openCvUtil.findByGrayBase64(screen, villageConfig.checking_mail_box)
-    }
     if (!!findPoint) {
       yoloTrainHelper.saveImage(screen, '打开新村成功', 'open_village_success')
       FloatyInstance.setFloatyInfo({ x: findPoint.centerX(), y: findPoint.centerY() }, '打开蚂蚁新村成功')
@@ -134,9 +224,7 @@ function VillageRunner () {
       return true
     } else {
       yoloTrainHelper.saveImage(screen, '打开新村失败', 'open_village_failed')
-      errorInfo('打开蚂蚁新村失败', true)
       LogFloaty.pushErrorLog('打开蚂蚁新村失败')
-      // killAlipay()
       return false
     }
   }
@@ -164,7 +252,7 @@ function VillageRunner () {
     haveDriveOut |= !!doCheckAndDriveOut(screen, villageConfig.booth_position_left)
     haveDriveOut |= !!doCheckAndDriveOut(screen, villageConfig.booth_position_right)
     if (haveDriveOut) {
-      yoloTrainHelper.saveImage(screen, '有可以驱离的好友', 'operate_booth')
+      yoloTrainHelper.saveImage(screen, '有可以驱离的好友', 'operation_booth')
       LogFloaty.pushLog('成功驱离了好友的摊位')
       sleep(1000)
     }
@@ -182,7 +270,7 @@ function VillageRunner () {
       sleep(1000)
       if (!inviteFriend(point)) {
         warnInfo('无可邀请好友，不再检查空位')
-        automator.click(config.device_width / 2, config.device_height * 0.1)
+        automator.clickPointRandom(config.device_width / 2, config.device_height * 0.1)
         noMoreFriend = true
         sleep(1000)
       }
@@ -199,13 +287,34 @@ function VillageRunner () {
   }
 
   function checkAnyEmptyBoothByYolo () {
-    // 检查是否有可驱赶的摊位
-    let findOperationBooth = yoloCheckAll('可操作摊位', { labelRegex: 'operation_booth' })
-    if (findOperationBooth && findOperationBooth.length > 0) {
-      let screen = commonFunctions.captureScreen()
-      findOperationBooth.forEach(ocrPosition => {
-        doCheckAndDriveOut(screen, [ocrPosition.left, ocrPosition.top, ocrPosition.width, ocrPosition.height])
-      })
+    if (!villageConfig.booth_left_setted || !villageConfig.booth_right_setted) {
+      // 检查是否有可驱赶的摊位
+      let findOperationBooth = yoloCheckAll('可操作摊位', { labelRegex: 'operation_booth' })
+      if (findOperationBooth && findOperationBooth.length > 0) {
+        findOperationBooth.forEach(ocrPosition => {
+          let boothRegion = [ocrPosition.left, ocrPosition.top, ocrPosition.width, ocrPosition.height].map(v => parseInt(v))
+          if (ocrPosition.left < 300 && !villageConfig.booth_left_setted) {
+            debugInfo(['设置左侧摊位坐标，原坐标：{}，新坐标：{}',JSON.stringify(villageConfig.booth_position_left), JSON.stringify(boothRegion)])
+            villageConfig.booth_left_setted = true
+            villageConfig.booth_position_left = boothRegion
+            config.overwrite('village.booth_left_setted',true)
+            config.overwrite('village.booth_position_left',boothRegion)
+          } else if (!villageConfig.booth_right_setted) {
+            debugInfo(['设置右侧摊位坐标，原坐标：{}，新坐标：{}',JSON.stringify(villageConfig.booth_position_right), JSON.stringify(boothRegion)])
+            villageConfig.booth_right_setted = true
+            villageConfig.booth_position_right = boothRegion
+            config.overwrite('village.booth_right_setted',true)
+            config.overwrite('village.booth_position_right',boothRegion)
+          }
+        })
+      }
+    }
+    let screen = commonFunctions.captureScreen()
+    if (villageConfig.booth_left_setted) {
+      doCheckAndDriveOut(screen, villageConfig.booth_position_left)
+    }
+    if (villageConfig.booth_right_setted) {
+      doCheckAndDriveOut(screen, villageConfig.booth_position_right)
     }
     // 检测空摊位并邀请
     let findEmptyBooth = yoloCheckAll('空摊位', { labelRegex: 'empty_booth' })
@@ -225,7 +334,7 @@ function VillageRunner () {
         sleep(1000)
         if (!inviteFriend(point)) {
           warnInfo('无可邀请好友，不再检查空位')
-          automator.click(config.device_width / 2, config.device_height * 0.1)
+          automator.clickPointRandom(config.device_width / 2, config.device_height * 0.1)
           noMoreFriend = true
           sleep(1000)
         }
@@ -277,26 +386,29 @@ function VillageRunner () {
     return null
   }
 
-  function yoloWaitFor (desc, filter) {
+  function yoloWaitFor (desc, filter, timeout) {
     debugInfo(['通过yolo方式等待界面元素：{}', desc])
     let img = null
-    let timeoutCount = 5
+    let timeoutCount = timeout? timeout/1000 : 5
     let result = []
     WarningFloaty.clearAll()
     do {
-      sleep(400)
+      sleep(1000)
       img = commonFunctions.checkCaptureScreenPermission()
       result = YoloDetection.forward(img, filter)
     } while (result.length <= 0 && timeoutCount-- > 0)
     if (result.length > 0) {
-      let { x, y, width, height } = result[0]
-      WarningFloaty.addRectangle('找到：' + desc, [x, y, width, height])
+      result.forEach(obj => {
+        let { x, y, width, height, label, confidence } = obj
+        WarningFloaty.addRectangle('找到：' + desc+label+confidence, [x, y, width, height])
+      })
       yoloTrainHelper.saveImage(img, desc + '成功', desc)
     } else {
       yoloTrainHelper.saveImage(img, desc + '失败', desc + '_failed')
     }
     return result.length > 0
   }
+  
   /**
    * 校验并驱赶
    * @param {ImageWrapper} screen 
@@ -309,7 +421,7 @@ function VillageRunner () {
     }
     WarningFloaty.addRectangle('OCR识别区域，需要保证点击位置在摊位上', region, '#00ff00')
     let clickPoint = wrapRegionForInvite(region)
-    WarningFloaty.addText('点击位置', { x: clickPoint.centerX, y: clickPoint.centerY }, '#ff0000')
+    WarningFloaty.addText('点击位置', { x: clickPoint.centerX(), y: clickPoint.centerY() }, '#ff0000')
     let clipImg = images.clip(screen, region[0], region[1], region[2], region[3])
     if (localOcr.type == 'mlkit') {
       // 识别准确率太低 进行放大
@@ -317,34 +429,51 @@ function VillageRunner () {
     }
     let recognizeText = localOcr.recognize(clipImg)
     debugInfo(['识别文本：{}', recognizeText])
-    let regex = new RegExp(villageConfig.friend_end_up_regex || /.*(已停产|余.*营.*)/)
+    recognizeText = recognizeText.replace(/\n/g, '').replace(/ /g, '')
+    let regex = new RegExp(villageConfig.friend_end_up_regex || /.*(已停.*|(剩|余).*(经|营).*)/)
     debugInfo(['摊位超时校验正则：{}', '' + regex])
     if (regex.test(recognizeText)) {
       FloatyInstance.setFloatyInfo({ x: region[0], y: region[1] }, '摊位超时：' + recognizeText)
-      sleep(1000)
       WarningFloaty.clearAll()
       var r = new org.opencv.core.Rect(region[0], region[1], region[2], region[3])
-      automator.click(r.x + r.width / 2, r.y + r.height * 0.2)
+      automator.clickPointRandom(r.x + r.width / 2, r.y + r.height * 0.2)
+      sleep(1000)
       let checking = widgetUtils.widgetWaiting(/.*并请走.*/, null, 3000)
       if (checking) {
         sleep(1000)
         let driveOut = widgetUtils.widgetGetOne('请走TA', 3000)
         if (driveOut) {
-          driveOut.click()
-          sleep(1000)
+          automator.clickRandom(driveOut)
+          sleep(3000)
           return true
         }
       } else {
-        let pendding = widgetUtils.widgetGetOne('待会儿再说', 3000)
+        let pendding = widgetUtils.widgetGetOne('待会再说', 3000)
         if (pendding) {
-          pendding.click()
+          automator.clickRandom(pendding)
+          sleep(1000)
         }
       }
-      sleep(1000)
     } else {
       debugInfo(['未找到超时摊位 区域：{}', JSON.stringify(region)])
       WarningFloaty.clearAll()
-    }
+      if (/剩余免租/.test(recognizeText)){
+        let leftTime = 0
+        let leftTimeResult = /(\d+)时(\d+)分/.exec(recognizeText)
+        if (leftTimeResult) {
+          leftTime = parseInt(leftTimeResult[1]) * 60 + parseInt(leftTimeResult[2])
+        } else {
+          leftTimeResult = /(\d+)分钟/.exec(recognizeText)
+          if (leftTimeResult) {
+            leftTime = parseInt(leftTimeResult[1])
+          }
+        }
+        debugInfo(['剩余时间正则校验结果：{}', JSON.stringify(leftTimeResult)])
+        if (leftTime>0) {
+          _this.nextVisitTime = _this.nextVisitTime ? Math.max(leftTime, _this.nextVisitTime) : leftTime
+        }
+      }
+  }
     return false
   }
 
@@ -406,52 +535,69 @@ function VillageRunner () {
   function inviteFriend (matchResult) {
     FloatyInstance.setFloatyInfo({ x: matchResult.centerX(), y: matchResult.centerY() }, '邀请好友')
     sleep(1000)
-    automator.click(matchResult.centerX(), matchResult.centerY())
-    widgetUtils.widgetWaiting('邀请.*摆摊', null, 3000)
-    let avatarList = widgetUtils.widgetGetAll('avatar', villageConfig.friends_finding_timeout || 8000, false, null, { algorithm: 'PDFS' })
-    if (avatarList && avatarList.length > 0) {
-      let invited = false
-      avatarList.forEach(avatar => {
-        if (invited) {
-          return
-        }
-        let index = avatar.indexInParent()
-        if (avatar.parent().childCount() <= index + 3) {
-          return
-        }
-        let nameWidget = avatar.parent().child(index + 1)
-        let name = nameWidget.desc() || nameWidget.text()
-        let inviteBtnContainer = avatar.parent().child(index + 3)
-        let inviteBtn = null
-        if (inviteBtnContainer.childCount() > 0) {
-          inviteBtn = inviteBtnContainer.child(0)
-        } else {
-          inviteBtnContainer = avatar.parent().child(index + 2)
-          if (inviteBtnContainer.childCount() > 0) {
-            inviteBtn = inviteBtnContainer.child(0)
-          }
-        }
-        let inviteText = inviteBtn.text() || inviteBtn.desc()
-        if (inviteText !== '直接邀请摆摊') {
-          debugInfo(['好友：[{}] 不能邀请：{}', name, inviteText])
-          return
-        }
-        if (typeof villageConfig != 'undefined' && villageConfig.booth_black_list && villageConfig.booth_black_list.length > 0) {
-          if (villageConfig.booth_black_list.indexOf(name) > -1) {
-            debugInfo(['{} 在黑名单中 跳过邀请', name])
+    automator.clickPointRandom(matchResult.centerX(), matchResult.centerY())
+    sleep(2000)
+    let enterInviteView = widgetUtils.widgetWaiting('邀请.*摆摊', null, 3000)
+    if (!enterInviteView) {
+      warnInfo('未找到好友邀请界面')
+      findCloseButtonAndClick()
+      return
+    }
+    
+    let invited = false
+    do {
+      let avatarList = widgetUtils.widgetGetAll('avatar', villageConfig.friends_finding_timeout || 3000, false, m => m.boundsInside(0,0,config.device_width,config.device_height-10), { algorithm: 'PVDFS' })
+      if (avatarList && avatarList.length > 0) {
+        avatarList.forEach(avatar => {
+          if (invited) {
             return
           }
+          let index = avatar.indexInParent()
+          if (avatar.parent().childCount() <= index + 3) {
+            return
+          }
+          let nameWidget = avatar.parent().child(index + 1)
+            let name = nameWidget.desc() || nameWidget.text()
+          let inviteBtnContainer = avatar.parent().child(index + 3)
+          let inviteBtn = null
+          if (inviteBtnContainer.childCount() > 0) {
+            inviteBtn = inviteBtnContainer.child(0)
+          } else {
+            inviteBtnContainer = avatar.parent().child(index + 2)
+            if (inviteBtnContainer.childCount() > 0) {
+              inviteBtn = inviteBtnContainer.child(0)
+            }
+          }
+          let inviteText = inviteBtn.text() || inviteBtn.desc()
+          if (inviteText !== '直接邀请摆摊') {
+            debugInfo(['好友：[{}] 不能邀请：{}', name, inviteText])
+            return
+          }
+          if (typeof villageConfig != 'undefined' && villageConfig.booth_black_list && villageConfig.booth_black_list.length > 0) {
+            if (villageConfig.booth_black_list.indexOf(name) > -1) {
+              debugInfo(['{} 在黑名单中 跳过邀请', name])
+              return
+            }
+          }
+          debugInfo(['邀请好友「{}」', name])
+          // automator.clickRandom(inviteBtn)
+          inviteBtn.click()
+          sleep(1000)
+          invited = true
+        })
+      } 
+      if (!invited) {
+        if (!widgetUtils.widgetCheck('直接邀请摆摊', 1000)) {
+          warnInfo('无可邀请好友', true)
+          break
+        } else {
+          randomScrollDown()
+          sleep(2000)
         }
-        debugInfo(['邀请好友「{}」', name])
-        inviteBtn.click()
-        sleep(500)
-        invited = true
-      })
-      return invited
-    } else {
-      warnInfo('无可邀请好友', true)
-      return false
-    }
+      }
+    } while (!invited)
+    
+    return invited
   }
 
   /**
@@ -486,13 +632,15 @@ function VillageRunner () {
       yoloTrainHelper.saveImage(screen, '有摆摊赚币按钮', 'booth_btn')
       FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '找到了摆摊赚币按钮')
       sleep(500)
-      automator.click(point.centerX(), point.centerY())
+      automator.clickPointRandom(point.centerX(), point.centerY())
       sleep(500)
       widgetUtils.widgetWaiting('随机摆摊', null, 3000)
       sleep(500)
       recycleBoothIfNeeded()
       sleep(500)
       setupBooth()
+      sleep(1000)
+      findCloseButtonAndClick()
     } else {
       warnInfo('未找到摆摊赚币', true)
     }
@@ -526,7 +674,8 @@ function VillageRunner () {
     sleep(500)
     let confirm = widgetUtils.widgetGetOne('确认收摊')
     if (confirm) {
-      confirm.click()
+      automator.clickRandom(confirm)
+      _this.visited_friends.length = 0
       sleep(1000)
     }
   }
@@ -547,7 +696,7 @@ function VillageRunner () {
       let randomSetup = widgetUtils.widgetGetOne('随机摆摊')
       if (randomSetup) {
         sleep(1000)
-        randomSetup.click()
+        automator.clickRandom(randomSetup)
       }
     }
   }
@@ -613,6 +762,17 @@ function VillageRunner () {
     FloatyInstance.setFloatyPosition(0, 0)
     let region = null
     if (YoloDetection.enabled) {
+      //先看有没有可贴的罚单
+      let punishBooth = yoloCheck('贴罚单摊位', { labelRegex: 'punish_booth', confidence: 0.7 })
+      if (punishBooth) {
+        let { left, top, width, height } = punishBooth
+        let punishRegion = [left, top, width, height]
+        FloatyInstance.setFloatyInfo({ x: punishRegion[0], y: punishRegion[1] }, '有可贴罚单')
+        sleep(1000)
+        var r = new org.opencv.core.Rect(punishRegion[0], punishRegion[1], punishRegion[2], punishRegion[3])
+        automator.clickPointRandom(r.x + r.width / 2, r.y + r.height * 0.2)
+      }
+      //再看有没有空位
       let emptyBooth = yoloCheck('空摊位', { labelRegex: 'empty_booth', confidence: 0.7 })
       if (emptyBooth) {
         let { left, top, width, height } = emptyBooth
@@ -644,7 +804,7 @@ function VillageRunner () {
       FloatyInstance.setFloatyInfo({ x: region[0], y: region[1] }, '有空位')
       sleep(1000)
       var r = new org.opencv.core.Rect(region[0], region[1], region[2], region[3])
-      automator.click(r.x + r.width / 2, r.y + r.height * 0.2)
+      automator.clickPointRandom(r.x + r.width / 2, r.y + r.height * 0.2)
       widgetUtils.widgetWaiting('收摊|去摆摊', null, 3000)
       sleep(1500)
       return doSetupBooth()
@@ -679,7 +839,7 @@ function VillageRunner () {
       let point = setupBtn.bounds()
       FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '去摆摊')
       sleep(500)
-      // automator.click(point.centerX(), point.centerY())
+      // automator.clickRandom(setupBtn)
       setupBtn.click()
       currentBoothSetted += 1
       sleep(500)
@@ -694,14 +854,14 @@ function VillageRunner () {
   /**
    * 加速产币
    */
-  function speedAward (force) {
+  this.speedAward = function (force) {
     if (!force && commonFunctions.checkSpeedUpCollected()) {
       debugInfo('今日已经完成加速，不继续查找加速产币 答题等请手动执行')
-      return
+      // return
     }
     if (clickSpeedAward()) {
       doneList = []
-      doTask(force)
+      this.doTaskByText()
       let hadAward = false
       if (doCollectAll()) {
         debugInfo('全部领取点击完毕')
@@ -712,13 +872,13 @@ function VillageRunner () {
         debugInfo('已经没有可领取的加速产币了 设置今日不再执行')
         commonFunctions.setSpeedUpCollected()
       }
-      if (villageConfig.award_close_specific) {
-        debugInfo(['已指定关闭按钮坐标：{}, {}', villageConfig.award_close_x, villageConfig.award_close_y])
-        automator.click(villageConfig.award_close_x, villageConfig.award_close_y)
-      } else {
-        debugInfo(['通过计算点击区域 关闭领取抽屉，如果不能正确关闭，请在设置中指定 加速产币关闭按钮坐标：{}, {}', config.device_width / 2, config.device_height * 0.2])
-        automator.click(config.device_width / 2, config.device_height * 0.2)
-      }
+      // debugInfo(['通过计算点击区域 关闭领取抽屉，如果不能正确关闭，请在设置中指定 加速产币关闭按钮坐标：{}, {}', config.device_width / 2, config.device_height * 0.2])
+      // let closeBtnPos = null
+      // if (villageConfig.award_close_specific) {
+      //   debugInfo(['已指定关闭按钮坐标：{}, {}', villageConfig.award_close_x, villageConfig.award_close_y])
+      //   closeBtnPos = {x : villageConfig.award_close_x, y: villageConfig.award_close_y}
+      // }
+      findCloseButtonAndClick()
       sleep(1000)
     } else {
       LogFloaty.pushLog('未找到加速产币')
@@ -727,7 +887,7 @@ function VillageRunner () {
     if (!waitForLoading()) {
       LogFloaty.pushLog('等待界面加载失败，尝试重新打开')
       commonFunctions.minimize()
-      openMyVillage()
+      this.openMyVillage()
     }
   }
 
@@ -744,8 +904,8 @@ function VillageRunner () {
         debugInfo(['{} clickable: {} visible: {} centerClickable {}', idx, collect.clickable(), collect.visibleToUser(), automator.checkCenterClickable(collect)])
         let bounds = collect.bounds()
         debugInfo(['boudsRegion {}', JSON.stringify([bounds.left, bounds.top, bounds.width(), bounds.height()])])
-        if (automator.checkCenterClickable(collect) && collect.bounds().bottom < config.device_height * 0.9) {
-          automator.clickCenter(collect)
+        if (automator.checkCenterClickable(collect) && commonFunctions.isObjectInScreen(collect)) {
+          automator.clickRandom(collect)
           sleep(500)
         } else {
           if (automator.checkCenterClickable(collect) && collect.clickable()) {
@@ -755,9 +915,10 @@ function VillageRunner () {
         }
       })
       if (hasNoVisible) {
-        let startY = config.device_height - config.device_height * 0.15
-        let endY = startY - config.device_height * 0.3
-        automator.gestureDown(startY, endY)
+        // let startY = config.device_height - config.device_height * 0.15
+        // let endY = startY - config.device_height * 0.3
+        // automator.gestureDown(startY, endY)
+        randomScrollDown()
         debugInfo(['滑动下一页检查'])
         sleep(1000)
         return doCollectAll(true, tryTime + 1)
@@ -766,22 +927,18 @@ function VillageRunner () {
     return hadAward
   }
 
-  function reopenAndCheckSpeedAward (tryTime) {
+  this.reopenAndCheckSpeedAward = function (tryTime) {
+    debugInfo(['重新打开新村尝试次数：{}', tryTime])
+    commonFunctions.minimize()
+    
     tryTime = tryTime || 1
     if (tryTime >= 5) {
       errorInfo('重新打开失败多次，跳过执行重新打开', true)
       return
     }
     LogFloaty.pushLog('重新打开新村触发领取')
-    app.startActivity({
-      action: 'VIEW',
-      data: 'alipays://platformapi/startapp?appId=68687809',
-      packageName: 'com.eg.android.AlipayGphone'
-    })
-
-    sleep(1000)
-    if (waitForLoading()) {
-      return clickSpeedAward()
+    if (this.openMyVillage()) {
+      return this.speedAward()
     } else {
       LogFloaty.pushLog('重新打开新村失败，关闭支付宝再打开')
       sleep(1000)
@@ -794,46 +951,48 @@ function VillageRunner () {
         sleep(10000 + tryTime * 2000)
         device.cancelKeepingAwake()
       }
-      return reopenAndCheckSpeedAward(tryTime + 1)
+      return this.reopenAndCheckSpeedAward(tryTime + 1)
     }
   }
 
   function killAlipay (rekill) {
-    app.startActivity({
-      packageName: "com.eg.android.AlipayGphone",
-      action: "android.settings.APPLICATION_DETAILS_SETTINGS",
-      data: "package:com.eg.android.AlipayGphone"
-    });
-    LogFloaty.pushLog('等待进入设置界面加载')
-    let killed = false
-    sleep(1000)
-    let stop = widgetUtils.widgetWaiting('结束运行', null, 3800)
-    if (stop) {
-      sleep(1000)
-      stop = widgetUtils.widgetGetOne('结束运行')
-      automator.clickCenter(stop)
-      sleep(1000)
-      let confirm = widgetUtils.widgetGetOne('确定')
-      if (confirm) {
-        automator.clickCenter(confirm)
-        killed = true
-      }
-    } else {
-      LogFloaty.pushWarningLog('未能找到结束运行，通过设置关闭支付宝失败')
-    }
-    if (!killed && !rekill) {
-      LogFloaty.pushLog('未能通过设置界面关闭，采用手势关闭')
-      config.killAppWithGesture = true
-      commonFunctions.killCurrentApp()
-      killAlipay(true)
-    }
+    // app.startActivity({
+    //   packageName: "com.eg.android.AlipayGphone",
+    //   action: "android.settings.APPLICATION_DETAILS_SETTINGS",
+    //   data: "package:com.eg.android.AlipayGphone"
+    // });
+    // LogFloaty.pushLog('等待进入设置界面加载')
+    // let killed = false
+    // sleep(1000)
+    // let stop = widgetUtils.widgetWaiting('(结束运行)|(强行停止)', null, 3800)
+    // if (stop) {
+    //   sleep(1000)
+    //   stop = widgetUtils.widgetGetOne('(结束运行)|(强行停止)')
+    //   automator.clickRandom(stop)
+    //   sleep(1000)
+    //   let confirm = widgetUtils.widgetGetOne('(确定)|(强行停止)')
+    //   if (confirm) {
+    //     automator.clickRandom(confirm)
+    //     killed = true
+    //   }
+    // } else {
+    //   LogFloaty.pushWarningLog('未能找到结束运行，通过设置关闭支付宝失败')
+    // }
+    // if (!killed && !rekill) {
+    //   LogFloaty.pushLog('未能通过设置界面关闭，采用手势关闭')
+    //   config.killAppWithGesture = true
+    //   commonFunctions.killCurrentApp()
+    //   killAlipay(true)
+    // }
+    commonFunctions.minimize()
   }
 
   function clickSpeedAward () {
     if (YoloDetection.enabled) {
       let speedupBtn = yoloCheck('加速产币', { confidence: 0.7, labelRegex: 'speedup' })
       if (speedupBtn) {
-        automator.click(speedupBtn.x, speedupBtn.y)
+        automator.clickPointRandom(speedupBtn.x, speedupBtn.y)
+        sleep(3000)
         return true
       }
     }
@@ -842,7 +1001,7 @@ function VillageRunner () {
     let point = openCvUtil.findByGrayBase64(screen, villageConfig.speed_award)
     if (!point && localOcr.enabled) {
       debugInfo(['尝试OCR识别 加速产币'])
-      let ocrResult = localOcr.recognizeWithBounds(screen, null, '加速产币')
+      let ocrResult = localOcr.recognizeWithBounds(screen, [0,config.device_height/5*4,config.device_width,config.device_height/5], '加速产币')
       if (ocrResult && ocrResult.length > 0) {
         point = ocrResult[0].bounds
       }
@@ -851,62 +1010,161 @@ function VillageRunner () {
       yoloTrainHelper.saveImage(screen, '有加速产币', 'village_speedup')
       FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '加速产币')
       sleep(1000)
-      automator.click(point.centerX(), point.centerY())
-      sleep(1000)
+      automator.clickPointRandom(point.centerX(), point.centerY())
+      sleep(3000)
       return true
     }
   }
 
-  let taskTitleList = ['会员签到', '芭芭农场', '饿了么', '余额宝', '喂小羊', '听听TA的故事', '神奇海洋']
-  let justBackList = ['听听TA的故事']
-
-  function doTask (force, lastLength) {
-    let toFinishList = widgetUtils.widgetGetAll('去完成') || []
-    let currnetType = null
-    toFinishList = toFinishList.filter(v => {
-      let index = v.indexInParent()
-      if (index < 2 || currnetType) {
-        return
-      }
-      let parent = v.parent()
-      let titleContainer = parent.child(index - 2)
-      let title = titleContainer.text()
-      for (let i = 0; i < taskTitleList.length; i++) {
-        let keyword = taskTitleList[i]
-        // 标题包含可执行任务 且该任务未执行过
-        if (title.indexOf(keyword) > -1) {
-          if (doneList.indexOf(keyword) > -1) {
-            warnInfo(['当前任务已执行过，可能执行失败 不再执行它：[{}] title: {}', keyword, title])
-            return false
-          }
-          currnetType = keyword
-          return true
-        }
-      }
-      return false
-    })
-    if (toFinishList.length > 0) {
-      let toFinishBtn = toFinishList[0]
-      toFinishBtn.click()
-      LogFloaty.pushLog('等待界面加载')
-      doneList.push(currnetType)
-      if (justBackList.indexOf(currnetType) > -1) {
-        sleep(5000)
-        back()
-        sleep(1000)
-      } else {
-        sleep(10000)
-        commonFunctions.minimize()
-        reopenAndCheckSpeedAward()
-      }
-      return doTask(force, toFinishList.length)
-    }
-    return false
+  /**
+   * 获取当前界面是否在项目界面
+   */
+  this.isInProjectUI = function (projectCode, timeout) {
+    timeout = timeout || 2000
+    return waitForLoading(timeout)
   }
 
-  this.speedAward = speedAward
+  /**
+   * 获取当前界面是否在任务界面
+   */
+  this.isInTaskUI = function (projectCode, timeout) {
+    timeout = timeout || 2000
+    return widgetUtils.widgetWaiting('当前产速.*', '任务列表', timeout)
+  }
+
+  this.startApp = function (projectCode) {
+    return this.openMyVillage()
+  }
+
+  this.openTaskWindow = function (projectCode) {
+    return clickSpeedAward()
+  }
+
+  this.answerQuestion = function (titleObj,entryBtn) {
+    let ai_type = config.ai_type || 'kimi'
+    let kimi_api_key = config.kimi_api_key
+    let chatgml_api_key = config.chatgml_api_key
+    let key = ai_type === 'kimi' ? kimi_api_key : chatgml_api_key
+    if (!key) {
+      LogFloaty.pushLog('推荐去KIMI开放平台申请API Key并在可视化配置中进行配置')
+      LogFloaty.pushLog('否则免费接口这个智障AI经常性答错')
+    }
+
+    let result = false
+    if (entryBtn) {
+      LogFloaty.pushLog('等待进入 '+titleObj.text())
+      entryBtn.click()
+      sleep(3000)
+
+      widgetUtils.widgetWaiting('题目来源.*')
+      sleep(1000)
+      let result = AiUtil.getQuestionInfo(ai_type, key)
+      if (result) {
+        LogFloaty.pushLog('答案解释：' + result.describe)
+        LogFloaty.pushLog('答案坐标：' + JSON.stringify(result.target))
+        automator.clickPointRandom(result.target.x, result.target.y)
+      }
+      sleep(1000)
+      automator.back()
+      sleep(1000)
+    }
+    return !!result
+  }
+
+  this.doPlayGame = function (titleObj,entryBtn) {
+    let result = false
+    if (entryBtn) {
+      LogFloaty.pushLog('等待进入 '+titleObj.text())
+      entryBtn.click()
+      sleep(5000);
+
+      playBtn = widgetUtils.widgetGetOne('马上玩')
+      if (playBtn) {
+        LogFloaty.pushLog('点击马上玩')
+        automator.clickRandom(playBtn)
+        sleep(5000)
+        if (automator.clickClose()) {
+          LogFloaty.pushLog('关闭游戏')
+        } else {
+          LogFloaty.pushWarningLog('未找到关闭游戏按钮')
+        }
+        result = true
+      }
+
+      automator.back()
+      sleep(1000)
+    }
+    return result
+  }
+
+  let randomTop = {start:config.device_height/2-50, end:config.device_height/2+50}
+  let randomBottom= {start:config.device_height * 0.85 - 50, end:config.device_height * 0.85 + 50}
+
+  function randomScrollDown () {
+    automator.randomScrollDown(randomBottom.start, randomBottom.end, randomTop.start, randomTop.end)
+  }
+
+  function randomScrollUp (isFast) {
+    automator.randomScrollUp(randomTop.start, randomTop.end, randomBottom.start, randomBottom.end,isFast)
+  }
+
+  function scrollUpTop () {
+    let limit = 3
+    do {
+      randomScrollUp(true)
+    } while (limit-- > 0)
+  }
+
+  this.doTaskByText = function () {
+    LogFloaty.pushLog('执行每日任务')
+
+    let taskUITop = {start:config.device_height/2-50, end:config.device_height/2+50}
+    let taskUIBottom= {start:config.device_height * 0.85 - 50, end:config.device_height * 0.85 + 50}
+    let taskProcess = widgetUtils.widgetGetOne('任务进度轨道')
+    if (taskProcess) {
+      taskUITop = {start:taskProcess.bounds().top-50, end:taskProcess.bounds().bottom+50}
+      debugInfo('任务进度轨道位置：'+taskUITop.start+'~'+taskUITop.end)
+    }
+
+    let hasTask = false
+    let limit = 3  
+    while (limit-- > 0) {
+      automator.randomScrollDown(taskUIBottom.start, taskUIBottom.end, taskUITop.start, taskUITop.end)
+      sleep(1000)
+    }
+  
+    let taskInfos = [
+      {btnRegex:'去完成', tasks:[
+        {taskType:'disable',titleRegex:'邀请好友.*'},
+        {taskType:'answerQuestion',titleRegex:'职业小知识问答'},
+        {taskType:'browse',titleRegex:'.*木兰市集.*',timeout:30,needScroll:true},
+        {taskType:'browse',titleRegex:'.*蚂蚁庄园',timeout:5,needScroll:false},
+        {taskType:'doPlayGame',titleRegex:'.*去玩解压小游戏'},
+        {taskType:'browse',titleRegex:'.*支付宝.*',timeout:5,needScroll:false},
+        {taskType:'browse',titleRegex:'.*农货.*',timeout:15,needScroll:true},
+        {taskType:'browse',titleRegex:'.*芝麻.*',timeout:5,needScroll:false},
+
+        {taskType:'app',titleRegex:'.*天猫.*',timeout:15,needScroll:true},
+        {taskType:'app',titleRegex:'.*点淘.*',timeout:20,needScroll:false},
+        {taskType:'app',titleRegex:'.*淘宝.*',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'.*高德.*',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'.*饿了么.*',timeout:10,needScroll:false},
+      ]},
+    ]
+ 
+    taskUtil.initProject(this,'village')
+    taskUtil.doTasks(taskInfos)
+
+    limit = 3  
+    while (limit-- > 0) {
+      automator.randomScrollUp(taskUITop.start, taskUITop.end, taskUIBottom.start, taskUIBottom.end,true)
+      sleep(1000)
+    }
+  }
+
+  // this.speedAward = speedAward
   this.waitForLoading = waitForLoading
-  this.doTask = doTask
+  // this.doTask = doTask
   this.killAlipay = killAlipay
 }
 

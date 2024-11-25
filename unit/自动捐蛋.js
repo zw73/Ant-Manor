@@ -2,7 +2,11 @@ let { config } = require('../config.js')(runtime, this)
 config.async_save_log_file = false
 let singletonRequire = require('../lib/SingletonRequirer.js')(runtime, this)
 let commonFunctions = singletonRequire('CommonFunction')
+let { logInfo, errorInfo, warnInfo, debugInfo, infoLog, debugForDev, clearLogFile, flushAllLogs } = singletonRequire('LogUtils')
 let runningQueueDispatcher = singletonRequire('RunningQueueDispatcher')
+logInfo('======加入任务队列，并关闭重复运行的脚本=======')
+runningQueueDispatcher.addRunningTask()
+
 let automator = singletonRequire('Automator')
 let widgetUtils = singletonRequire('WidgetUtils')
 let localOcr = require('../lib/LocalOcrUtil.js')
@@ -10,14 +14,10 @@ let WarningFloaty = singletonRequire('WarningFloaty')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
 let yoloTrainHelper = singletonRequire('YoloTrainHelper')
 let FloatyInstance = singletonRequire('FloatyUtil')
-let { logInfo, errorInfo, warnInfo, debugInfo, infoLog, debugForDev, clearLogFile, flushAllLogs } = singletonRequire('LogUtils')
 let resourceMonitor = require('../lib/ResourceMonitor.js')(runtime, this)
 
 let manorRunner = require('../core/AntManorRunner.js')
 let unlocker = require('../lib/Unlock.js')
-
-logInfo('======加入任务队列，并关闭重复运行的脚本=======')
-runningQueueDispatcher.addRunningTask()
 
 // 注册自动移除运行中任务
 commonFunctions.registerOnEngineRemoved(function () {
@@ -65,11 +65,21 @@ exit()
 function doDonateEgg () {
   let clicked = false
   if (YoloDetection.enabled) {
+    let collectButton = yoloCheck('收蛋按钮', { confidence: 0.7, labelRegex: 'collect_egg' })
+    if (collectButton) {
+      debugInfo(['通过YOLO找到收蛋按钮: {}', collectButton])
+      FloatyInstance.setFloatyInfo(collectButton, '收蛋按钮')
+      automator.clickPointRandom(collectButton.x, collectButton.y)
+      sleep(2000)
+    } else {
+      warnInfo('未能通过YOLO找到收蛋按钮', true)
+    }
+
     let donateButton = yoloCheck('捐蛋按钮', { confidence: 0.7, labelRegex: 'donate' })
     if (donateButton) {
       debugInfo(['通过YOLO找到捐蛋按钮: {}', donateButton])
       FloatyInstance.setFloatyInfo(donateButton, '捐蛋按钮')
-      automator.click(donateButton.x, donateButton.y)
+      automator.clickPointRandom(donateButton.x, donateButton.y)
       clicked = true
     } else {
       warnInfo('未能通过YOLO找到捐蛋按钮', true)
@@ -82,26 +92,26 @@ function doDonateEgg () {
       let position = { x: btnBounds.left, y: btnBounds.top }
       debugInfo(['通过OCR找到了捐蛋按钮：{}', position])
       FloatyInstance.setFloatyInfo(position, '捐蛋按钮')
-      automator.click(position.x, position.y)
+      automator.clickPointRandom(position.x, position.y)
       clicked = true
     }
   }
   if (!clicked) {
     warnInfo(['未能通过YOLO或OCR找到捐蛋按钮，请确认在可视化配置-执行设置中正确配置了捐蛋按钮坐标'])
     // 点击捐蛋
-    automator.click(config.donate_egg.x || 530, config.donate_egg.y || 2100)
+    automator.clickPointRandom(config.donate_egg.x || 530, config.donate_egg.y || 2100)
   }
   sleep(2000)
   WarningFloaty.clearAll()
   let donateEgg = findByWidgetAndRecheckByOcr('去捐蛋')
   if (donateEgg) {
     displayFloaty(donateEgg, '去捐蛋')
-    automator.clickCenter(donateEgg)
+    automator.clickRandom(donateEgg)
     sleep(3000)
     donateEgg = findByWidgetAndRecheckByOcr('立即捐蛋')
     if (donateEgg) {
       displayFloaty(donateEgg, '立即捐蛋')
-      automator.clickCenter(donateEgg)
+      automator.clickRandom(donateEgg)
       sleep(1000)
       widgetUtils.widgetWaiting('捐爱心蛋')
       sleep(1000)
@@ -114,7 +124,7 @@ function doDonateEgg () {
       donateEgg = findByWidgetAndRecheckByOcr('立即捐蛋')
       if (donateEgg) {
         displayFloaty(donateEgg, '立即捐蛋')
-        automator.clickCenter(donateEgg)
+        automator.clickRandom(donateEgg)
         sleep(1000)
         return true
       }

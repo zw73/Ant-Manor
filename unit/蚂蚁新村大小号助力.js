@@ -150,7 +150,7 @@ if (config.accounts && config.accounts.length > 1) {
       openMyVillage()
       sleep(1000)
       // 自动点击自己的能量豆
-      automator.click(villageConfig.village_reward_click_x, villageConfig.village_reward_click_y)
+      automator.clickPointRandom(villageConfig.village_reward_click_x, villageConfig.village_reward_click_y)
       // 签到
       VillageRunner.speedAward(true)
 
@@ -182,14 +182,14 @@ function openShareSupport (shareUrl) {
   floatyInstance.setFloatyInfo({ x: config.device_width / 2, y: config.device_height / 2 }, "查找是否有'打开'对话框")
   let confirm = widgetUtils.widgetGetOne(/^打开$/, 1000)
   if (confirm) {
-    automator.clickCenter(confirm)
+    automator.clickRandom(confirm)
   }
   sleep(1000)
   let confirmCollect = widgetUtils.widgetGetOne('收下了')
   if (confirmCollect) {
     let point = confirmCollect.bounds()
     floatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, "收下了")
-    confirmCollect.click()
+    automator.clickRandom(confirmCollect)
     setExecuted()
   } else {
     warnInfo(['没有收下了按钮，可能已经助力过或者被拉黑了'])

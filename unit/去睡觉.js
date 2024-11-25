@@ -97,11 +97,11 @@ function goToBed () {
   }
   FloatyInstance.setFloatyInfo(clickPosition, '去睡觉')
   sleep(1000)
-  automator.click(clickPosition.x, clickPosition.y)
+  automator.clickPointRandom(clickPosition.x, clickPosition.y)
   // 训练，找到床
   sleep(2000)
   yoloTrainHelper.saveImage(commonFunctions.captureScreen(), '小鸡睡觉床', 'sleep_bed', _config.save_sleep_train_data)
-  automator.click(config.to_sleep_bed.x || 200, config.to_sleep_bed.y || 740)
+  automator.clickPointRandom(config.to_sleep_bed.x || 200, config.to_sleep_bed.y || 740)
   sleep(2000)
   let yesSleepBtn = widgetUtils.widgetGetOne('去睡觉')
   if (yesSleepBtn) {
@@ -109,7 +109,7 @@ function goToBed () {
     debugInfo(['btn: {}', bounds])
     FloatyInstance.setFloatyInfo({ x: bounds.centerX(), y: bounds.centerY() }, '去睡觉')
     sleep(1000)
-    automator.click(bounds.centerX(), bounds.centerY())
+    automator.clickPointRandom(bounds.centerX(), bounds.centerY())
   }
   back()
 }
