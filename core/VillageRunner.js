@@ -17,6 +17,7 @@ let AiUtil = require('../lib/AIRequestUtil.js')
 let taskUtil = singletonRequire('../lib/TaskUtil.js')
 
 FloatyInstance.enableLog()
+// automator.registerVisualHelper(WarningFloaty)
 
 let villageConfig = config.village_config
 // 摆摊摊位框选 带文字
@@ -632,8 +633,9 @@ function VillageRunner () {
       yoloTrainHelper.saveImage(screen, '有摆摊赚币按钮', 'booth_btn')
       FloatyInstance.setFloatyInfo({ x: point.centerX(), y: point.centerY() }, '找到了摆摊赚币按钮')
       sleep(500)
-      automator.clickPointRandom(point.centerX(), point.centerY())
-      sleep(500)
+      // automator.clickPointRandom(point.centerX(), point.centerY())
+      automator.click(point.centerX(), point.centerY())
+      sleep(1000)
       widgetUtils.widgetWaiting('随机摆摊', null, 3000)
       sleep(500)
       recycleBoothIfNeeded()
@@ -1126,7 +1128,6 @@ function VillageRunner () {
       debugInfo('任务进度轨道位置：'+taskUITop.start+'~'+taskUITop.end)
     }
 
-    let hasTask = false
     let limit = 3  
     while (limit-- > 0) {
       automator.randomScrollDown(taskUIBottom.start, taskUIBottom.end, taskUITop.start, taskUITop.end)

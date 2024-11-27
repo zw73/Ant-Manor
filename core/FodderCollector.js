@@ -12,6 +12,7 @@ let YoloDetection = singletonRequire('YoloDetectionUtil')
 let AiUtil = require('../lib/AIRequestUtil.js')
 let FloatyInstance = singletonRequire('FloatyUtil')
 let manorRunner = require('../core/AntManorRunner.js')
+let taskUtil = singletonRequire('../lib/TaskUtil.js')
 
 function Collector () {
   let _this = this
@@ -161,40 +162,10 @@ function Collector () {
     // 雇佣小鸡
     this.hireChicken()
   
-    let hasTask = false
-    do {
-      hasTask = false
-
-      // 其他任务
-      for (let i = 0; i < taskInfos.length; i++) {
-        let taskInfo = taskInfos[i]
-        let btns = widgetUtils.widgetGetAll(taskInfo.btnRegex, 3000)
-        if (btns && btns.length > 0) {
-          btns.forEach(btn => {
-            let titleObj = commonFunctions.getTaskTitleObj(btn)
-            if (titleObj) {
-              let titleText = titleObj.text()
-              LogFloaty.pushLog('发现任务：'+titleText)
-              for (let j = 0; j < taskInfo.tasks.length; j++) {
-                let task = taskInfo.tasks[j]
-                if (titleText.match(task.titleRegex)) {
-                  LogFloaty.pushLog('开始执行任务：'+titleText)
-                  if (task.taskType == 'browse') {
-                    hasTask = this.doCommonTask(titleText, btn, task.timeout, task.needScroll) || hasTask
-                  } else if (task.taskType == 'app') {
-                    hasTask = this.doCommonTask(titleText, btn, task.timeout, task.needScroll) || hasTask
-                  } else {
-                    hasTask = this.doSpecialTask(task.taskType, titleObj, btn) || hasTask
-                  }
-                  this.backToTaskUI()
-                  break
-                }
-              }
-            }
-          })
-        }
-      }
-    } while (hasTask && this.isInTaskUI())
+    // 其他任务
+    taskUtil.initProject(this,'Manor')
+    taskUtil.doTasks(taskInfos)
+  
     scrollUpTop()
   }
 
@@ -494,7 +465,7 @@ function Collector () {
     if (entryBtn) {
       entryBtn.click()
       LogFloaty.pushLog('等待进入雇佣小鸡窗口')
-      sleep(3000)
+      sleep(5000)
       let hireRegex = '当前还可雇佣(\\d+)只小鸡'
       let hireText = widgetUtils.widgetGetOne(hireRegex,5000)
       if (hireText) {
@@ -612,160 +583,6 @@ function Collector () {
     automator.back()
     sleep(1000)
     return true
-  }
-  
-  this.doVisitAppTask = function (titleText,entryBtn,timeout,needScroll) {
-    if (!commonFunctions.checkAppInstalledByName(titleText)) {
-      LogFloaty.pushLog('未安装应用，跳过执行：'+titleText)
-      return false
-    }
-    
-    currentRunning = commonFunctions.myCurrentPackage()
-    debugInfo('当前包名：'+currentRunning)
-    entryBtn.click()
-  
-    LogFloaty.pushLog('等待进入 '+titleText+', 计时：'+timeout+', 滑动：'+needScroll)
-    let waitCount = 10
-    while (currentRunning == commonFunctions.myCurrentPackage() && waitCount-- > 0) {
-      sleep(1000)
-    }
-    if (currentRunning == commonFunctions.myCurrentPackage()) {
-      LogFloaty.pushLog('进入失败，返回')
-      return false
-    }
-    //已进入目标应用，等待加载完成
-    sleep(5000)
-  
-    //根据需要等待一段时间进行浏览
-    if (timeout) {
-      LogFloaty.pushLog(titleText+' 等待倒计时结束')
-      let limit = timeout / 2
-      while (limit-- > 0) {
-        //检查是否有弹窗
-        let popupCancelBtn = widgetUtils.widgetGetOne("^取消|忽略|关闭|拒绝$", 1000, false, false, m => m.boundsInside(0,  config.device_height * 0.2, config.device_width, config.device_height))
-        if (popupCancelBtn) {
-          debugInfo('找到了弹窗取消按钮')
-          automator.clickRandom(popupCancelBtn)
-          sleep(1000)
-        }
-        //检查是否有验证窗口，有则等待直到消失
-        commonFunctions.waitForTBVerify()
-  
-        sleep(1000)
-        LogFloaty.replaceLastLog(titleText+' 等待倒计时结束 剩余：' + limit + 's')
-        if (limit % 2 == 0 && needScroll) {
-          automator.randomScrollDown()
-        }
-      }
-    } else {
-      sleep(3000)
-      LogFloaty.pushLog('啥也不用干 直接返回')
-    }
-    commonFunctions.minimize()
-    sleep(1000)
-    if (currentRunning != commonFunctions.myCurrentPackage()) {
-      LogFloaty.pushLog('未返回原应用，直接打开 '+ currentRunning)
-      app.launch(currentRunning);
-      sleep(3000)
-    }
-
-    automator.back()
-    sleep(1000)
-    return true
-  }
-
-  this.doCommonTask = function (titleText, entryBtn, timeout, needScroll) {
-    if (!commonFunctions.checkAppInstalledByName(titleText)) {
-      LogFloaty.pushLog('未安装应用，跳过执行：'+titleText)
-      return false
-    }
-    
-    if (!entryBtn) {
-      LogFloaty.pushLog('无入口按钮，跳过执行：'+titleText)
-      return false
-    }
-    titleText = titleText || entryBtn.text()
-    timeout = timeout || 15
-    let taskType = 'browse'
-  
-    currentRunning = commonFunctions.myCurrentPackage()
-    debugInfo('当前包名：'+currentRunning)
-    
-    entryBtn.click()
-    LogFloaty.pushLog('等待进入 '+titleText+', 计时：'+timeout+', 滑动：'+needScroll)
-    sleep(5000)
-
-    if (currentRunning != commonFunctions.myCurrentPackage()) {
-      taskType = 'visitapp'
-      //已进入目标应用，等待加载完成
-      sleep(5000)
-    } else if (this.isInTaskUI()) {
-      LogFloaty.pushLog('进入任务失败：'+titleText)
-      return false
-    }
-  
-    //检查是否有验证窗口，有则等待直到消失
-    commonFunctions.waitForTBVerify()
-
-    //根据需要等待一段时间进行浏览
-    if (timeout) {
-      LogFloaty.pushLog(titleText+' 等待倒计时结束')
-      let limit = timeout
-      while (limit-- > 0) {
-        //检查是否有弹窗
-        let popupCancelBtn = widgetUtils.widgetGetOne("^取消|忽略|关闭|拒绝$", 1000, false, false, m => m.boundsInside(0,  config.device_height * 0.2, config.device_width, config.device_height))
-        if (popupCancelBtn) {
-          debugInfo('找到了弹窗取消按钮')
-          automator.clickRandom(popupCancelBtn)
-        }
-  
-        LogFloaty.replaceLastLog(titleText+' 等待倒计时结束 剩余：' + limit + 's')
-        if (limit % 2 == 0 && needScroll) {
-          automator.scrollUpAndDown()
-          sleep(100)
-        } else {
-          sleep(1000)
-        }
-      }
-    } else {
-      sleep(3000)
-      LogFloaty.pushLog('啥也不用干 直接返回')
-    }
-    if (taskType == 'visitapp') {
-      commonFunctions.minimize()
-      sleep(1000)
-      if (currentRunning != commonFunctions.myCurrentPackage()) {
-        LogFloaty.pushLog('未返回原应用，直接打开 '+ currentRunning)
-        app.launch(currentRunning);
-        sleep(3000)
-      }
-    }
-
-    automator.back()
-    sleep(1000)
-    return true
-  }
-
-  this.doSpecialTask = function (action,titleObj,entryBtn) {
-    if (!titleObj||!entryBtn) {
-      return false
-    }
-    switch(action) {
-      case 'answerQuestion':
-        return this.answerQuestion(titleObj,entryBtn)
-      case 'luckyDraw':
-        return this.luckyDraw(titleObj,entryBtn)
-      case 'farmFertilize':
-        return this.farmFertilize(titleObj,entryBtn)
-      case 'doCook':
-        return this.doCook(titleObj,entryBtn)
-      case 'doChickenPlay':
-        return this.doChickenPlay(titleObj,entryBtn)
-      case 'feedFish':
-        return this.feedFish(titleObj,entryBtn)
-      default:
-        return false
-    }
   }
   
   function collectCurrentVisible () {
