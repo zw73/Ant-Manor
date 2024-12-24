@@ -14,7 +14,7 @@ let LogFloaty = singletonRequire('LogFloaty')
 let yoloTrainHelper = singletonRequire('YoloTrainHelper')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
 let AiUtil = require('../lib/AIRequestUtil.js')
-let taskUtil = singletonRequire('../lib/TaskUtil.js')
+let taskUtil = require('../lib/TaskUtil.js')
 
 FloatyInstance.enableLog()
 // automator.registerVisualHelper(WarningFloaty)
@@ -105,12 +105,31 @@ function VillageRunner () {
       debugInfo(['已开启多设备自动登录检测，检查是否有 进入支付宝 按钮'])
       let entryBtn = widgetUtils.widgetGetOne(/^进入支付宝$/, 1000)
       if (entryBtn) {
-        FloatyInstance.setFloatyText('其他设备正在登录，等待5分钟后进入')
-        commonFunctions.waitForAction(300, '等待进入支付宝')
-        unlocker && unlocker.exec()
-        automator.clickRandom(entryBtn)
-        sleep(1000)
-        return true
+        let storage = storages.create("alipay_multi_login")
+        let multiLoginFlag = storage.get("flag")
+        let multiLoginTime = storage.get("timestamp")
+        let currentTime = new Date().getTime()
+        let waitMin = 10
+        if (!multiLoginFlag) {
+          FloatyInstance.setFloatyText('检测到其他设备登录，' + waitMin + '分钟后重试')
+          debugInfo('检测到其他设备登录,记录时间并设置10分钟后重试')
+          storage.put("flag", true)
+          storage.put("timestamp", currentTime)
+          commonFunctions.setUpAutoStart(waitMin)
+          exit()
+        } else if (currentTime - multiLoginTime >= waitMin * 60 * 1000) {
+          FloatyInstance.setFloatyText('等待时间已到，点击进入支付宝')
+          debugInfo('已等待10分钟,点击进入支付宝')
+          automator.clickRandom(entryBtn)
+          sleep(1000)
+          return true
+        } else {
+          let remainMinutes = Math.ceil((waitMin * 60 * 1000 - (currentTime - multiLoginTime)) / (60 * 1000))
+          FloatyInstance.setFloatyText('等待时间未到，还需等待' + remainMinutes + '分钟')
+          debugInfo('等待时间未到10分钟,设置剩余时间后重试')
+          commonFunctions.setUpAutoStart(remainMinutes)
+          exit()
+        }
       } else {
         debugInfo(['未找到 进入支付宝 按钮'])
       }
@@ -1080,9 +1099,9 @@ function VillageRunner () {
       entryBtn.click()
       sleep(5000);
 
-      playBtn = widgetUtils.widgetGetOne('马上玩')
+      playBtn = widgetUtils.widgetGetOne('去玩')
       if (playBtn) {
-        LogFloaty.pushLog('点击马上玩')
+        LogFloaty.pushLog('点击去玩')
         automator.clickRandom(playBtn)
         sleep(5000)
         if (automator.clickClose()) {

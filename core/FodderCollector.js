@@ -12,7 +12,7 @@ let YoloDetection = singletonRequire('YoloDetectionUtil')
 let AiUtil = require('../lib/AIRequestUtil.js')
 let FloatyInstance = singletonRequire('FloatyUtil')
 let manorRunner = require('../core/AntManorRunner.js')
-let taskUtil = singletonRequire('../lib/TaskUtil.js')
+let taskUtil = require('../lib/TaskUtil.js')
 
 function Collector () {
   let _this = this
@@ -151,6 +151,7 @@ function Collector () {
         {taskType:'app',titleRegex:'去一淘APP逛逛',timeout:15,needScroll:false},
         {taskType:'app',titleRegex:'去点淘逛一逛',timeout:20,needScroll:false},
         {taskType:'app',titleRegex:'去淘宝签到逛一逛',timeout:10,needScroll:false},
+        {taskType:'app',titleRegex:'去菜鸟.*',timeout:15,needScroll:false},
 
         {taskType:'luckyDraw',titleRegex:'.*抽抽乐.*'},
         {taskType:'farmFertilize',titleRegex:'去芭芭农场.*'},
@@ -313,7 +314,7 @@ function Collector () {
       } else {
         LogFloaty.pushWarningLog('未找到施肥按钮')
       }
-      result = !!fertilizeBtn && this.backToTaskUI()
+      result = !!fertilizeBtn
     }
     return result
   }
@@ -368,7 +369,7 @@ function Collector () {
       } else {
         LogFloaty.pushLog('未找到做美食按钮')
       }
-      result = result && this.backToTaskUI()
+      result = result
     }
     return result
   }
@@ -510,47 +511,11 @@ function Collector () {
       LogFloaty.pushLog('已找到领饲料入口')
       automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
       sleep(3000)
-      return this.isInTaskUI()
+      return this.isInTaskUI(projectCode)
     } else {
       LogFloaty.pushWarningLog('未能找到领饲料入口')
       return false
     }
-  }
-
-  this.backToTaskUI = function (projectCode) {
-    warnInfo('检查是否在任务界面，不在的话返回，尝试两次')
-    let backResult = false
-    let waitCount = 2
-    while (!(backResult=this.isInTaskUI(projectCode,5000)) && waitCount-->0) {
-      automator.back()
-      sleep(1000)
-    }
-  
-    if (backResult) {
-      sleep(2000)
-      return true
-    }
-    
-    warnInfo(['返回失败，重新尝试打开任务界面'])
-    if (!this.isInProjectUI(projectCode)) {
-      warnInfo(['不在项目界面，重新尝试打开项目'])
-      this.startApp(projectCode)
-    }
-  
-    if (!this.isInProjectUI(projectCode)) {
-      warnInfo(['打开项目失败，5分钟后重新尝试'])
-      commonFunctions.setUpAutoStart(5)
-      return false
-    }
-  
-    if(!this.isInTaskUI(projectCode)) {
-      if (!this.openTaskWindow(projectCode)) {
-        warnInfo(['打开任务界面失败，5分钟后重新尝试'])
-        commonFunctions.setUpAutoStart(5)
-        return false
-      }
-    }
-    return true
   }
 
   this.doBrowseTask = function (titleText, entryBtn, timeout, needScroll) {

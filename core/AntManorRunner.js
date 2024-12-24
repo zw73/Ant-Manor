@@ -1,4 +1,3 @@
-
 let { config } = require('../config.js')(runtime, this)
 let singletonRequire = require('../lib/SingletonRequirer.js')(runtime, this)
 
@@ -709,7 +708,7 @@ function AntManorRunner () {
     }
   }
   
-  this.doFamily = function () {
+  this.doFamily = function (skipMorning) {
     //OCR检查“家庭”并点击
     let familyBtn = this.checkByOcr([0,config.device_height/4*3,config.device_width,config.device_height/4],'^家庭$')
     if (familyBtn) {
@@ -725,8 +724,8 @@ function AntManorRunner () {
 
     //6:00-10:00道早安
     let isMorning = hour >= 6 && hour < 10
-    if (isMorning) {
-      let morningBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^道早安$',1)
+    if (isMorning && !skipMorning) {
+      let morningBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^道早安$',3)
       if (morningBtn) {
         _FloatyInstance.setFloatyText('发现早安按钮, 道早安')
         automator.clickPointRandom(morningBtn.bounds.centerX(), morningBtn.bounds.centerY())
@@ -736,19 +735,23 @@ function AntManorRunner () {
           automator.clickRandom(confirmBtn)
           sleep(1000)
 
-         let closeBtn = widgetUtils.widgetGetOne('复制口令邀请.*',2000)
-         closeBtn = closeBtn? (closeBtn.parent()? closeBtn.parent().parent().child(2):null) : null
-         if (closeBtn) {
+          let closeBtn = widgetUtils.widgetGetOne('复制口令邀请.*',2000)
+          closeBtn = closeBtn? (closeBtn.parent()? closeBtn.parent().parent().child(2):null) : null
+          if (closeBtn) {
             automator.clickRandom(closeBtn)
             sleep(1000)
           }
+          
+          automator.back()
+          sleep(2000)
+          return this.doFamily(true)
         }
       }
     }
     //6:00-10:00、11:00-15:00、16:00-20:00 之间请客
     let isEatTime = hour >= 6 && hour < 10 || hour >= 11 && hour < 15 || hour >= 16 && hour < 20
     if (isEatTime) {
-      let eatBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去请客$',1)
+      let eatBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去请客$',3)
       if (eatBtn) {
         _FloatyInstance.setFloatyText('发现请客按钮，请客吃饭')
         eatClickPoint = [config.device_width/2,eatBtn.bounds.bottom+100]
@@ -1172,12 +1175,31 @@ function openAlipayMultiLogin (reopen) {
     debugInfo(['已开启多设备自动登录检测，检查是否有 进入支付宝 按钮'])
     let entryBtn = widgetUtils.widgetGetOne(/^进入支付宝$/, 1000)
     if (entryBtn) {
-      _FloatyInstance.setFloatyText('其他设备正在登录，等待5分钟后进入')
-      _commonFunctions.waitForAction(300, '等待进入支付宝')
-      unlocker && unlocker.exec()
-      automator.clickRandom(entryBtn)
-      sleep(1000)
-      return true
+      let storage = storages.create("alipay_multi_login")
+      let multiLoginFlag = storage.get("flag")
+      let multiLoginTime = storage.get("timestamp")
+      let currentTime = new Date().getTime()
+      let waitMin = 10
+      if (!multiLoginFlag) {
+        _FloatyInstance.setFloatyText('检测到其他设备登录，' + waitMin + '分钟后重试')
+        debugInfo('检测到其他设备登录,记录时间并设置10分钟后重试')
+        storage.put("flag", true)
+        storage.put("timestamp", currentTime)
+        _commonFunctions.setUpAutoStart(waitMin)
+        exit()
+      } else if (currentTime - multiLoginTime >= waitMin * 60 * 1000) {
+        _FloatyInstance.setFloatyText('等待时间已到，点击进入支付宝')
+        debugInfo('已等待10分钟,点击进入支付宝')
+        automator.clickRandom(entryBtn)
+        sleep(1000)
+        return true
+      } else {
+        let remainMinutes = Math.ceil((waitMin * 60 * 1000 - (currentTime - multiLoginTime)) / (60 * 1000))
+        _FloatyInstance.setFloatyText('等待时间未到，还需等待' + remainMinutes + '分钟')
+        debugInfo('等待时间未到10分钟,设置剩余时间后重试')
+        _commonFunctions.setUpAutoStart(remainMinutes)
+        exit()
+      }
     } else {
       debugInfo(['未找到 进入支付宝 按钮'])
     }
