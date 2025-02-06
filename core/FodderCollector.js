@@ -156,7 +156,7 @@ function Collector () {
         {taskType:'luckyDraw',titleRegex:'.*抽抽乐.*'},
         {taskType:'farmFertilize',titleRegex:'去芭芭农场.*'},
         {taskType:'doCook',titleRegex:'小鸡厨房.*'},
-        {taskType:'doChickenPlay',titleRegex:'去小鸡乐园.*'},
+        //{taskType:'doChickenPlay',titleRegex:'去小鸡乐园.*'},
       ]},
     ]
     
@@ -329,15 +329,15 @@ function Collector () {
       LogFloaty.pushLog('等待进入小鸡厨房')
       sleep(3000)
       LogFloaty.pushLog('查找 领食材和做美食 按钮')
-      let ocrResult = localOcr.recognizeWithBounds(commonFunctions.captureScreen(), null, '^.*食材|做美食|\\d+肥料$')
+      let ocrResult = localOcr.recognizeWithBounds(commonFunctions.captureScreen(), null, '^(.*食材)|(做美食)|(\\d+肥料)$')
       if (ocrResult && ocrResult.length >= 0) {
-        let cookBtn = ocrResult.filter(item => item.label.match(/做美食/) && item.bounds.top>config.device_height/4*3)
+        let cookBtn = ocrResult.filter(item => item.label.match(/^做美食$/) && item.bounds.top>config.device_height/4*3  && item.bounds.left>config.device_width/2)
         if (cookBtn && cookBtn.length > 0) {
           cookBtn = cookBtn[0].bounds
-          debugInfo('获取领食材按钮并依次点击')
-          let getBtns = ocrResult.filter(item => item.label.match(/^食材|领今日食材$/))
+          let getBtns = ocrResult.filter(item => item.label.match(/^食材|领取食材|领今日食材$/))
           if (getBtns && getBtns.length > 0) {
             getBtns.forEach(item => {
+              debugInfo('点击领食材按钮: ' + item.label)
               let bounds = item.bounds
               automator.clickPointRandom(bounds.centerX(), bounds.centerY())
               sleep(2000)
@@ -353,11 +353,11 @@ function Collector () {
               automator.clickRandom(closeBtn)
               sleep(2000)
             }
-            if (resultText && resultText.text().match(/食材不够啦/)) {
+            if (!resultText || resultText.text().match(/食材不够啦/)) {
+              result = !!resultText
               break
             }
           }
-          result = true
         }
         debugInfo('领取厨余肥料')
         let collectBtn = ocrResult.filter(item => item.label.match(/\d+肥料/))
@@ -369,7 +369,6 @@ function Collector () {
       } else {
         LogFloaty.pushLog('未找到做美食按钮')
       }
-      result = result
     }
     return result
   }
@@ -381,7 +380,7 @@ function Collector () {
     if (entryBtn) {
       entryBtn.click()
       LogFloaty.pushLog('等待进入小鸡乐园')
-      if (widgetUtils.widgetWaiting('在乐园玩一玩，得宝箱','打开乐园界面',5000)) {
+      if (widgetUtils.widgetWaiting('开宝箱得乐园币','打开乐园界面',5000)) {
         let titleText = widgetUtils.widgetGetOne('星星球',3000)
         if (titleText) {
           let clickBtn = titleText.parent().child(3)
@@ -396,7 +395,7 @@ function Collector () {
             sleep(2000)
 
             let confirmBtn = null
-            while (confirmBtn = widgetUtils.widgetGetOne('去开宝箱.*|继续开宝箱.*',3000)) {
+            while (confirmBtn = widgetUtils.widgetGetOne('去开宝箱.*|继续开宝箱.*|开宝箱',3000)) {
               automator.clickRandom(confirmBtn)
               sleep(5000)
             }
@@ -466,14 +465,14 @@ function Collector () {
     if (entryBtn) {
       entryBtn.click()
       LogFloaty.pushLog('等待进入雇佣小鸡窗口')
-      sleep(5000)
+      widgetUtils.widgetWaiting('.*雇佣\\d+只小鸡',null,20000)
       let hireRegex = '当前还可雇佣(\\d+)只小鸡'
       let hireText = widgetUtils.widgetGetOne(hireRegex,5000)
       if (hireText) {
         let hireCount = new RegExp(hireRegex).exec(hireText.text())[1]
         LogFloaty.pushLog('可雇佣小鸡：' + hireCount)
         for(let i = 0; i < hireCount; i++){
-          let hireBtn = widgetUtils.widgetGetOne('雇佣并通知')
+          let hireBtn = widgetUtils.widgetGetOne('雇佣')
           if (hireBtn) {
             automator.clickRandom(hireBtn)
             sleep(1000)
@@ -634,7 +633,7 @@ function Collector () {
       } else {
         LogFloaty.pushWarningLog('无法通过yolo查找到关闭按钮')
         logUtils.warnInfo(['无法通过yolo查找到关闭按钮'])
-        automator.clickPointRandom(150,300)
+        automator.clickPointRandom(config.device_width/2,500)
       }
     } else {
       let screen = commonFunctions.captureScreen()

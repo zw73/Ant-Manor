@@ -142,10 +142,13 @@ function AntManorRunner () {
       result = YoloDetection.forward(img, filter)
     } while (result.length <= 0 && tryTime-- > 0)
     if (result.length > index) {
+      result.sort((a, b) => b.confidence - a.confidence)
+      result.forEach(r => {
+        debugInfo(['通过YOLO找到目标：{} label: {} confidence: {}', desc, r.label, r.confidence])
+      })
       let { x, y, width, height, label, confidence } = result[index]
       let left = x, top = y
       WarningFloaty.addRectangle('找到：' + desc, [left, top, width, height])
-      debugInfo(['通过YOLO找到目标：{} label: {} confidence: {}', desc, label, confidence])
       if (confidence < 0.9) {
         yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), desc + 'yolo准确率低', 'low_predict')
       }
@@ -543,7 +546,7 @@ function AntManorRunner () {
     let img = null
     let feed = false
     if (YoloDetection.enabled) {
-      let checkHasOrNoFood = this.yoloCheck('校验有饭吃', { confidence: 0.7, labelRegex: 'has_food|no_food' })
+      let checkHasOrNoFood = this.yoloCheck('校验有饭吃', { confidence: 0.9, labelRegex: 'has_food|no_food' })
       img = _commonFunctions.checkCaptureScreenPermission()
       if (checkHasOrNoFood && checkHasOrNoFood.label == 'has_food') {
         config.COUNT_DOWN_REGION = [checkHasOrNoFood.left, checkHasOrNoFood.top - 100, checkHasOrNoFood.width + 30, 100]
@@ -611,12 +614,12 @@ function AntManorRunner () {
   this.checkFeedSuccess = function (retryTime) {
     retryTime = retryTime || 0
     // 应该不会攒那么多特殊饲料吧
-    if (retryTime >= 5) {
+    if (retryTime >= 3) {
       return false
     }
     if (this.doFeed()) {
       sleep(1000)
-      return this.checkFeedSuccess(retryTime++)
+      return this.checkFeedSuccess(++retryTime)
     }
   }
 
@@ -714,7 +717,9 @@ function AntManorRunner () {
     if (familyBtn) {
       _FloatyInstance.setFloatyText('点击家庭')
       automator.clickPointRandom(familyBtn.bounds.centerX(), familyBtn.bounds.centerY()-20)
-      sleep(6000)
+      _commonFunctions.waitForAction(20,'进入家庭界面', () => {
+        return this.checkByOcr([0,config.device_height/4*3,config.device_width/2,config.device_height/4],'^家庭管理$')
+      })
     } else {
       return
     }

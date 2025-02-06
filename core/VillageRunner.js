@@ -573,21 +573,22 @@ function VillageRunner () {
             return
           }
           let index = avatar.indexInParent()
-          if (avatar.parent().childCount() <= index + 3) {
+          if (avatar.parent().childCount() <= index + 2) {
             return
           }
           let nameWidget = avatar.parent().child(index + 1)
-            let name = nameWidget.desc() || nameWidget.text()
-          let inviteBtnContainer = avatar.parent().child(index + 3)
-          let inviteBtn = null
-          if (inviteBtnContainer.childCount() > 0) {
-            inviteBtn = inviteBtnContainer.child(0)
-          } else {
-            inviteBtnContainer = avatar.parent().child(index + 2)
-            if (inviteBtnContainer.childCount() > 0) {
-              inviteBtn = inviteBtnContainer.child(0)
-            }
-          }
+          let name = nameWidget.desc() || nameWidget.text()
+          // let inviteBtnContainer = avatar.parent().child(index + 2)
+          // let inviteBtn = null
+          // if (inviteBtnContainer.childCount() > 0) {
+          //   inviteBtn = inviteBtnContainer.child(0)
+          // } else {
+          //   inviteBtnContainer = avatar.parent().child(index + 2)
+          //   if (inviteBtnContainer.childCount() > 0) {
+          //     inviteBtn = inviteBtnContainer.child(0)
+          //   }
+          // }
+          let inviteBtn = avatar.parent().child(index + 2)
           let inviteText = inviteBtn.text() || inviteBtn.desc()
           if (inviteText !== '直接邀请摆摊') {
             debugInfo(['好友：[{}] 不能邀请：{}', name, inviteText])
@@ -672,8 +673,8 @@ function VillageRunner () {
    */
   function recycleBoothIfNeeded () {
     LogFloaty.pushLog('查找超过2小时或已停产的摊位')
-    let over2 = /[2-6]时(\d+)分/
-    let stopped = /已停产/
+    let over2 = /.*[2-6]时(\d+)分.*/
+    let stopped = /.*已停产.*/
     let checkResult = widgetUtils.alternativeWidget(over2, stopped, null, true)
     if (checkResult.value == 0) {
       LogFloaty.pushLog('无超过2小时或已停产的摊位')
@@ -1155,7 +1156,7 @@ function VillageRunner () {
   
     let taskInfos = [
       {btnRegex:'去完成', tasks:[
-        {taskType:'disable',titleRegex:'邀请好友.*'},
+        {taskType:'disable',titleRegex:'.*好友.*'},
         {taskType:'answerQuestion',titleRegex:'职业小知识问答'},
         {taskType:'browse',titleRegex:'.*木兰市集.*',timeout:30,needScroll:true},
         {taskType:'browse',titleRegex:'.*蚂蚁庄园',timeout:5,needScroll:false},

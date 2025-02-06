@@ -6,6 +6,7 @@ let { logInfo, errorInfo, warnInfo, debugInfo, infoLog, debugForDev, clearLogFil
 let runningQueueDispatcher = singletonRequire('RunningQueueDispatcher')
 logInfo('======加入任务队列，并关闭重复运行的脚本=======')
 runningQueueDispatcher.addRunningTask()
+commonFunctions.killDuplicateScript()
 
 let automator = singletonRequire('Automator')
 let widgetUtils = singletonRequire('WidgetUtils')

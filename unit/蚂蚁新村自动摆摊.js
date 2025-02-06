@@ -7,6 +7,7 @@ let { logInfo, errorInfo, warnInfo, debugInfo, infoLog, debugForDev, clearLogFil
 logInfo('======加入任务队列，并关闭重复运行的脚本=======')
 runningQueueDispatcher.addRunningTask()
 let commonFunctions = singletonRequire('CommonFunction')
+commonFunctions.killDuplicateScript()
 let automator = singletonRequire('Automator')
 let callStateListener = !config.is_pro && config.enable_call_state_control ? singletonRequire('CallStateListener') : { exitIfNotIdle: () => { } }
 let resourceMonitor = require('../lib/ResourceMonitor.js')(runtime, this)
