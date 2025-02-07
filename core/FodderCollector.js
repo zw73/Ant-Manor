@@ -9,10 +9,12 @@ let logUtils = singletonRequire('LogUtils')
 let localOcr = require('../lib/LocalOcrUtil.js')
 let LogFloaty = singletonRequire('LogFloaty')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
+let NotificationHelper = singletonRequire('Notification')
 let AiUtil = require('../lib/AIRequestUtil.js')
 let FloatyInstance = singletonRequire('FloatyUtil')
 let manorRunner = require('../core/AntManorRunner.js')
 let taskUtil = require('../lib/TaskUtil.js')
+let yoloTrainHelper = singletonRequire('YoloTrainHelper')
 
 function Collector () {
   let _this = this
@@ -27,6 +29,19 @@ function Collector () {
   this.collectEntry = null;
 
   this.exec = function () {
+    if (this.openCollectFood()) {
+      sleep(1000)
+      this.doDailyTasks()
+      LogFloaty.pushLog('每日任务执行完毕，开始收集可收取饲料')
+      this.collectAllIfExists()
+      sleep(1000)
+    } else {
+      LogFloaty.pushWarningLog('未能找到领饲料入口')
+      warnInfo(['未能找到领饲料入口'], true)
+    }
+  }
+
+  this.openCollectFood = function (recheck) {
     let screen = commonFunctions.captureScreen()
     if (screen) {
       LogFloaty.pushLog('查找领饲料入口')
@@ -37,18 +52,17 @@ function Collector () {
         automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
         sleep(3000)
         if (!this.isInTaskUI()) {
-          //automator.clickPointRandom(this.collectEntry.centerX(), this.collectEntry.centerY())
-          sleep(3000)
+          LogFloaty.pushLog('未能找到领饲料界面信息, 可能并没有打开领饲料界面')
+          if (!recheck) {
+            return this.openCollectFood(true)
+          }
         }
-        this.doDailyTasks()
-        LogFloaty.pushLog('每日任务执行完毕，开始收集可收取饲料')
-        this.collectAllIfExists()
-        sleep(1000)
-      } else {
-        LogFloaty.pushWarningLog('未能找到领饲料入口')
-        warnInfo(['未能找到领饲料入口'], true)
+        // 没找到关闭按钮的话也至少点击了两次 当做打开了吧
+        return true
       }
-      screen.recycle()
+    } else {
+      LogFloaty.pushErrorLog('截图失败，无法校验领饲料按钮')
+      return false
     }
   }
 
@@ -192,6 +206,8 @@ function Collector () {
         LogFloaty.pushLog('答案解释：' + result.describe)
         LogFloaty.pushLog('答案坐标：' + JSON.stringify(result.target))
         automator.clickPointRandom(result.target.x, result.target.y)
+      } else {
+        NotificationHelper.createNotification('蚂蚁庄园答题失败', '今日脚本自动答题失败，请手动处理', config.notificationId * 10 + 3)
       }
       sleep(1000)
       automator.back()
@@ -548,8 +564,14 @@ function Collector () {
     sleep(1000)
     return true
   }
-  
-  function collectCurrentVisible () {
+
+  function collectCurrentVisible (tryTime) {
+    tryTime = tryTime || 0
+    if (tryTime > 10) {
+      logUtils.warnInfo(['循环领取超过10次 可能页面卡死 直接退出'])
+      _this.collected = false
+      return false
+    }
     auto.clearCache && auto.clearCache()
     let visiableCollect = widgetUtils.widgetGetAll(collectBtnContetRegex) || []
     let originList = visiableCollect
@@ -573,10 +595,17 @@ function Collector () {
           let closeBtn = confirmBtn.parent().parent().child(0).child(0)
           automator.clickRandom(closeBtn)
           sleep(1000)
+          return false
+        }
+        let closeIcon = className('android.widget.Image').depth(18).findOne(1000)
+        if (closeIcon) {
+          yoloTrainHelper.saveImage(commonFunctions.captureScreen(), '关闭按钮', 'close_icon')
+          automator.clickCenter(closeIcon)
+          sleep(1000)
         }
         return false
       }
-      return collectCurrentVisible()
+      return collectCurrentVisible(tryTime + 1)
     } else {
       _this.collected = false
       logUtils.debugInfo(['可领取控件均无效或不可见：{}', JSON.stringify((() => {

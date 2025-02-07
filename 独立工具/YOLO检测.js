@@ -9,6 +9,8 @@ let commonFunctions = singletonRequire('CommonFunction')
 let runningQueueDispatcher = singletonRequire('RunningQueueDispatcher')
 let YoloDetection = singletonRequire('YoloDetectionUtil')
 let TouchController = require('../lib/TouchController.js')
+let hijack = require('../lib/WebsocketCaptureHijack.js')
+hijack(commonFunctions)
 let logFloaty = singletonRequire('LogFloaty')
 logFloaty.fontSize = 30
 logFloaty.pushLog('脚本启动')
@@ -17,7 +19,7 @@ config.debuging = true
 let SCALE_RATE = config.scaleRate
 config.detect_by_yolo = true
 if (!YoloDetection.enabled) {
-  toastLog('当前版本不支持Yolo检测')
+  toastLog('当前版本不支持Yolo检测或Yolo模型无效请检查日志')
   exit()
 }
 YoloDetection.validLabels()
