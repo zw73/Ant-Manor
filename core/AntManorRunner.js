@@ -852,129 +852,247 @@ function AntManorRunner () {
     }
   }
   
-  this.doFamily = function (skipMorning) {
-    //OCR检查“家庭”并点击
-    let familyBtn = this.checkByOcr([0,config.device_height/4*3,config.device_width,config.device_height/4],'^家庭$')
-    if (familyBtn) {
-      _FloatyInstance.setFloatyText('点击家庭')
-      automator.clickPointRandom(familyBtn.bounds.centerX(), familyBtn.bounds.centerY()-20)
-      _commonFunctions.waitForAction(20,'进入家庭界面', () => {
-        return this.checkByOcr([0,config.device_height/4*3,config.device_width/2,config.device_height/4],'^家庭管理$')
-      })
-    } else {
-      return
-    }
-
-    let now = new Date()
-    let hour = now.getHours()
-
-    //6:00-10:00道早安
-    let isMorning = hour >= 6 && hour < 10
-    if (isMorning && !skipMorning) {
-      let morningBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^道早安$',3)
-      if (morningBtn) {
-        _FloatyInstance.setFloatyText('发现早安按钮, 道早安')
-        automator.clickPointRandom(morningBtn.bounds.centerX(), morningBtn.bounds.centerY())
+  /**
+   * 处理道早安操作
+   * @param {object} actionBtn OCR识别结果 包含bounds信息
+   * @returns {boolean} 是否成功执行
+   */
+  this.handleSayMorning = function (actionBtn) {
+    _FloatyInstance.setFloatyText('发现早安按钮, 道早安')
+    automator.clickPointRandom(actionBtn.bounds.centerX(), actionBtn.bounds.centerY())
+    sleep(1000)
+    let confirmBtn = widgetUtils.widgetGetOne('确认发送', 2000)
+    if (confirmBtn) {
+      automator.clickRandom(confirmBtn)
+      sleep(1000)
+      let closeBtn = widgetUtils.widgetGetOne('复制口令邀请.*', 2000)
+      closeBtn = closeBtn ? (closeBtn.parent() ? closeBtn.parent().parent().child(2) : null) : null
+      if (closeBtn) {
+        automator.clickRandom(closeBtn)
         sleep(1000)
-        let confirmBtn = widgetUtils.widgetGetOne('确认发送',2000)
-        if (confirmBtn) {
-          automator.clickRandom(confirmBtn)
-          sleep(1000)
+      }
+      return true
+    }
+    return false
+  }
 
-          let closeBtn = widgetUtils.widgetGetOne('复制口令邀请.*',2000)
-          closeBtn = closeBtn? (closeBtn.parent()? closeBtn.parent().parent().child(2):null) : null
+  /**
+   * 处理帮喂食操作
+   * @param {object} actionBtn OCR识别结果 包含bounds信息
+   * @returns {boolean} 是否成功执行
+   */
+  this.handleFeedFamily = function (actionBtn) {
+    _FloatyInstance.setFloatyText('发现喂食按钮，帮喂食')
+    automator.clickPointRandom(actionBtn.bounds.centerX(), actionBtn.bounds.centerY())
+    sleep(1000)
+    
+    let confirmBtn = widgetUtils.widgetGetOne('^确认.*$',2000)
+    if (confirmBtn) {
+      automator.clickRandom(confirmBtn)
+      sleep(1000)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * 处理去指派操作
+   * @param {object} actionBtn OCR识别结果 包含bounds信息
+   * @returns {boolean} 是否成功执行
+   */
+  this.handleInviteToWork = function (actionBtn) {
+    _FloatyInstance.setFloatyText('发现指派按钮，去指派')
+    automator.clickPointRandom(actionBtn.bounds.centerX(), actionBtn.bounds.centerY())
+    sleep(1000)
+
+    let confirmBtn = widgetUtils.widgetGetOne('^确认$',2000)
+    if (confirmBtn) {
+      automator.clickRandom(confirmBtn)
+      sleep(1000)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * 处理去请客操作
+   * @param {object} actionBtn OCR识别结果 包含bounds信息
+   * @returns {boolean} 是否成功执行
+   */
+  this.handleInviteToEat = function (actionBtn) {
+    _FloatyInstance.setFloatyText('发现请客按钮，请客吃饭')
+    let eatClickPoint = [config.device_width / 2, actionBtn.bounds.bottom + 100]
+    automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
+    sleep(1000)
+    
+    let luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食', 2000)
+    if (luckyBtn) {
+      let foodItems = widgetUtils.widgetGetAll('.*美食不足.*', 2000)
+      let needFoodNum = foodItems ? foodItems.length : 0
+      if (needFoodNum > 0) {
+        debugInfo('美食不足，需要' + needFoodNum + '个')
+        // 进入抽奖界面获取美食
+        automator.clickRandom(luckyBtn)
+        sleep(2000)
+        
+        // 循环抽奖直到满足需求
+        while (needFoodNum > 0) {
+          let drawResult = this.luckyDraw()
+          if (!drawResult) break
+          let [drawTimes, , luckyItemNum, luckyItemType] = drawResult
+          if (luckyItemType == '份') {
+            needFoodNum -= luckyItemNum
+            debugInfo('还需' + needFoodNum + '个美食')
+          }
+          if (drawTimes <= 0) {
+            debugInfo('抽奖机会用完啦')
+            break
+          }
+        }
+        
+        // 返回家庭界面
+        automator.back()
+        sleep(2000)
+
+        // 关闭并重新打开请客界面
+        luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食', 2000)
+        if (luckyBtn) {
+          let closeBtn = luckyBtn.parent() ? luckyBtn.parent().child(luckyBtn.indexInParent() + 1) : null
           if (closeBtn) {
             automator.clickRandom(closeBtn)
             sleep(1000)
           }
-          
-          automator.back()
-          sleep(2000)
-          return this.doFamily(true)
+          //如果食物已足够，则再次打开请客界面
+          if (needFoodNum <= 0) {
+            automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
+            sleep(1000)
+          }
         }
       }
     }
-    //6:00-10:00、11:00-15:00、16:00-20:00 之间请客
-    let isEatTime = hour >= 6 && hour < 10 || hour >= 11 && hour < 15 || hour >= 16 && hour < 20
-    if (isEatTime) {
-      let eatBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去请客$',3)
-      if (eatBtn) {
-        _FloatyInstance.setFloatyText('发现请客按钮，请客吃饭')
-        eatClickPoint = [config.device_width/2,eatBtn.bounds.bottom+100]
-        automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
-        sleep(1000)
-        let luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食',2000)
-        if (luckyBtn) {
-          let foodItems = widgetUtils.widgetGetAll('.*美食不足.*',2000)
-          let needFoodNum = foodItems? foodItems.length:0
-          debugInfo('美食不足，需要' + needFoodNum + '个')
 
-          //进入抽奖界面
-          automator.clickRandom(luckyBtn)
-          sleep(2000)
-          //抽奖直到满足需求
-          while (needFoodNum > 0) {
-            // 抽奖一次
-            drawResult = this.luckyDraw()
-            let drawTimes = drawResult? drawResult[0]:0
-            let luckyItemNum = drawResult? drawResult[2]:0
-            let luckyItemType = drawResult? drawResult[3]:''
-            if (luckyItemType=='份') {
-              needFoodNum -= luckyItemNum
-              debugInfo('还需' + needFoodNum + '个美食')
-            }
-            if (drawTimes <= 0) {
-              debugInfo('抽奖机会用完啦')
-              break
-            }
-          }
-          // 返回家庭界面
-          automator.back()
-          sleep(2000)
-          
-          //关闭并重新打开请客界面
-          luckyBtn = widgetUtils.widgetGetOne('.*抽奖得美食',2000)
-          if (luckyBtn) {
-            let closeBtn = luckyBtn.parent()? luckyBtn.parent().child(luckyBtn.indexInParent()+1):null
-            if (closeBtn) {
-              automator.clickRandom(closeBtn)
-              sleep(1000)
-            }
-            //如果食物已足够，则再次打开请客界面
-            if (needFoodNum <= 0) {
-              automator.clickPointRandom(eatClickPoint[0], eatClickPoint[1])
-              sleep(1000)
-            }
-          }
+    let confirmBtn = widgetUtils.widgetGetOne('^确认$', 2000)
+    if (confirmBtn) {
+      automator.clickRandom(confirmBtn)
+      sleep(1000)
+      return true
+    }
+    return false
+  }
+
+  /**
+   * 处理攒亲密度操作
+   * @param {object} signBtn OCR识别结果 包含bounds信息
+   * @returns {boolean} 是否成功执行
+   */
+  this.handleMoreAction = function (signBtn) {
+    let nextBtn = null
+    let actionTtile = null
+
+    //分享活动处理
+    actionTtile = widgetUtils.widgetGetOne('给好友分享一次活动\\(0/1\\).*',2000)
+    if (actionTtile) {
+      let actionBtn = actionTtile.parent().child(actionTtile.indexInParent() + 1)
+      if (actionBtn) {
+        automator.clickRandom(actionBtn)
+        nextBtn=widgetUtils.widgetGetOne('分享给Ta们.*',10000)
+        if (nextBtn) {
+          automator.clickRandom(nextBtn)
+          sleep(3000)
         }
-          
-        let confirmBtn = widgetUtils.widgetGetOne('^确认$',2000)
-        if (confirmBtn) {
-          automator.clickRandom(confirmBtn)
+      }
+    }
+
+    //捐步处理
+    actionTtile = widgetUtils.widgetGetOne('一起运动做公益\\(0/1\\).*',2000)
+    if (actionTtile) {
+      let actionBtn = actionTtile.parent().child(actionTtile.indexInParent() + 1)
+      if (actionBtn) {
+        automator.clickRandom(actionBtn)
+        nextBtn=widgetUtils.widgetGetOne('去捐步数',10000)
+        if (nextBtn) {
+          automator.clickRandom(nextBtn)
+          nextBtn=widgetUtils.widgetGetOne('立即捐步',10000)
+          if (nextBtn) {
+            automator.clickRandom(nextBtn)
+            nextBtn=widgetUtils.widgetGetOne('知道了',10000)
+            if (nextBtn) {
+              automator.clickRandom(nextBtn)
+              sleep(1000)
+            }
+          }
+          automator.back()
           sleep(1000)
         }
+        // //重新打开攒亲密度界面
+        // automator.clickPointRandom(config.device_width / 2, config.device_height / 4)
+        // sleep(1000)
+        // automator.clickPointRandom(signBtn.bounds.centerX(), signBtn.bounds.centerY())
+        // sleep(1000)
       }
     }
 
-    //帮喂饭
-    // let feedBtn = this.checkByOcr([0,config.device_height/3,config.device_width,config.device_height/2],'^去喂食$',1)
-    // if (feedBtn) {
-    //   _FloatyInstance.setFloatyText('发现喂食按钮，帮喂食')
-    //   automator.clickPointRandom(feedBtn.bounds.centerX(), feedBtn.bounds.centerY())
-    //   sleep(1000)
-    //   let confirmBtn = widgetUtils.widgetGetOne('^确认.*$',2000)
-    //   if (confirmBtn) {
-    //     automator.clickRandom(confirmBtn)
-    //     sleep(1000)
-    //   }
-    // }
-    
-    //OCR检查“立即签到”并点击
-    let signBtn = this.checkByOcr([0,config.device_height/4*3,config.device_width,config.device_height/4],'^立即签到$',1)
+    //关闭攒亲密度界面
+    automator.clickPointRandom(config.device_width / 2, config.device_height / 4)
+    sleep(1000)
+
+    return true
+  }
+
+  /**
+   * 执行家庭页面中的动作
+   */
+  this.doFamily = function () {
+    // OCR检查"家庭"并点击
+    let familyBtn = this.checkByOcr([0, config.device_height / 4 * 3, config.device_width, config.device_height / 4], '^家庭$')
+    if (familyBtn) {
+      _FloatyInstance.setFloatyText('点击家庭')
+      automator.clickPointRandom(familyBtn.bounds.centerX(), familyBtn.bounds.centerY() - 20)
+      if (!_commonFunctions.waitForAction(20, '进入家庭界面', () => {
+        return this.checkByOcr([0, config.device_height / 4 * 3, config.device_width / 2, config.device_height / 4], '^家庭管理$')
+      })) {
+        return
+      }
+    } else {
+      return
+    }
+
+    // 循环执行道早安和请客动作
+    let actionRegex = /^道早安|去请客|去指派$/
+    let region = [0, config.device_height / 3, config.device_width, config.device_height / 3]
+    while (true) {
+      let actionBtn = this.checkByOcr(region, actionRegex, 2)
+      if (!actionBtn) {
+        break
+      }
+      let actionText = actionBtn.label
+      let success = false
+      switch (actionText) {
+        case '道早安':
+          success = this.handleSayMorning(actionBtn)
+          break
+        case '去请客':
+          success = this.handleInviteToEat(actionBtn)
+          break
+        case '去喂食':
+          success = this.handleFeedFamily(actionBtn)
+          break
+        case '去指派':
+          success = this.handleInviteToWork(actionBtn)
+          break
+      }
+      // 执行完一个动作后等待5秒
+      sleep(10000)
+    }
+
+    // 单独检查并处理签到
+    let signRegion = [0, config.device_height / 4 * 3, config.device_width, config.device_height / 4]
+    let signBtn = this.checkByOcr(signRegion, '^立即签到|.*亲密度$', 1)
     if (signBtn) {
-      _FloatyInstance.setFloatyText('发现签到按钮，进行签到')
+      _FloatyInstance.setFloatyText('发现' + signBtn.label + '按钮，进行签到')
       automator.clickPointRandom(signBtn.bounds.centerX(), signBtn.bounds.centerY())
       sleep(1000)
+      this.handleMoreAction(signBtn)
     }
 
     //返回主界面
@@ -1381,12 +1499,12 @@ function AntManorRunner () {
     this.driveThief(findThiefRight) ? kicked = true : (findThiefRight && workerCount++)
 
     let findFoodInCenter = this.mainExecutor.yoloCheck('中间食盆位置', { confidence: 0.7, labelRegex: 'has_food', filter: result => result.x - (result.width / 2) < config.device_width / 2 /* x坐标位置在中心点左边，代表有野鸡存在而yolo识别失败了 */ })
-    if (findFoodInCenter) {
+    if (findFoodInCenter && !kicked && (!findThiefLeft || !findThiefRight)) {
       warnInfo(['食盆位置在中间，而野鸡驱赶失败，记录数据'])
       yoloTrainHelper.saveImage(_commonFunctions.captureScreen(), '偷吃野鸡识别失败', 'thief_chicken_check_failed')
       // 左右随便点击一下
-      kicked != this.driveThief({ x: findFoodInCenter.x - findFoodInCenter.width, y: findFoodInCenter.y }, '盲点左边野鸡坐标')
-      kicked != this.driveThief({ x: findFoodInCenter.x + findFoodInCenter.width * 2, y: findFoodInCenter.y }, '盲点右边野鸡坐标')
+      !findThiefLeft && kicked != this.driveThief({ x: findFoodInCenter.x - findFoodInCenter.width, y: findFoodInCenter.y }, '盲点左边野鸡坐标')
+      !findThiefRight && kicked != this.driveThief({ x: findFoodInCenter.x + findFoodInCenter.width * 2, y: findFoodInCenter.y }, '盲点右边野鸡坐标')
     }
     if (!kicked) {
       this.mainExecutor.pushLog('未找到偷吃野鸡')

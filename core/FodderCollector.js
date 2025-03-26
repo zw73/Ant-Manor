@@ -18,7 +18,7 @@ let yoloTrainHelper = singletonRequire('YoloTrainHelper')
 
 function Collector () {
   let _this = this
-  let collectBtnContetRegex = /^(x\d+g)领取$/
+  let collectBtnContetRegex = /^.*领取(\d+)克饲料$/
   this.useSimpleForMatchCollect = true
   this.useSimpleForCloseCollect = true
 
@@ -142,29 +142,30 @@ function Collector () {
     }
 
     let taskInfos = [
-      {btnRegex:'去答题', tasks:[
+      {btnRegex:'.*去答题', tasks:[
         {taskType:'answerQuestion',titleRegex:'.*'},
       ]},
-      {btnRegex:'去喂鱼', tasks:[
+      {btnRegex:'.*去喂鱼', tasks:[
         {taskType:'feedFish',titleRegex:'去鲸探喂鱼.*'},
       ]},
-      {btnRegex:'去完成', tasks:[
-        {taskType:'browse',titleRegex:'庄园小视频',timeout:20,needScroll:false},
-        {taskType:'browse',titleRegex:'去杂货铺逛一逛',timeout:15,needScroll:true},
-        {taskType:'browse',titleRegex:'逛一逛.*助农专场',timeout:3,needScroll:false},
-        {taskType:'browse',titleRegex:'去支付宝会员签到',timeout:3,needScroll:false},
-        {taskType:'browse',titleRegex:'去神奇海洋逛一逛',timeout:3,needScroll:false},
+      {btnRegex:'.*去完成', tasks:[
+        { taskType: 'disable', titleRegex: '玩.*' },
+        {taskType:'browse',titleRegex:'庄园小视频.*',timeout:20,needScroll:false},
+        {taskType:'browse',titleRegex:'去杂货铺逛一逛.*',timeout:15,needScroll:true},
+        {taskType:'browse',titleRegex:'逛一逛.*助农专场.*',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'去支付宝会员签到.*',timeout:3,needScroll:false},
+        {taskType:'browse',titleRegex:'去神奇海洋逛一逛.*',timeout:3,needScroll:false},
         {taskType:'browse',titleRegex:'.*农货.*',timeout:15,needScroll:true},
         {taskType:'browse',titleRegex:'.*芝麻.*',timeout:3,needScroll:false},
         {taskType:'browse',titleRegex:'逛逛花呗.*',timeout:3,needScroll:false},
         {taskType:'browse',titleRegex:'.*限时.*',timeout:3,needScroll:false},
 
-        {taskType:'app',titleRegex:'去逛一逛淘宝视频',timeout:20,needScroll:false},
-        {taskType:'app',titleRegex:'去逛一逛淘金币小镇',timeout:10,needScroll:false},
-        {taskType:'app',titleRegex:'去闲鱼逛一逛',timeout:15,needScroll:false},
-        {taskType:'app',titleRegex:'去一淘APP逛逛',timeout:15,needScroll:false},
-        {taskType:'app',titleRegex:'去点淘逛一逛',timeout:20,needScroll:false},
-        {taskType:'app',titleRegex:'去淘宝签到逛一逛',timeout:10,needScroll:false},
+        {taskType:'app',titleRegex:'去逛一逛淘宝视频.*',timeout:20,needScroll:false},
+        {taskType:'app',titleRegex:'去逛一逛淘金币小镇.*',timeout:10,needScroll:false},
+        {taskType:'app',titleRegex:'去闲鱼逛一逛.*',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'去一淘APP逛逛.*',timeout:15,needScroll:false},
+        {taskType:'app',titleRegex:'去点淘逛一逛.*',timeout:20,needScroll:false},
+        {taskType:'app',titleRegex:'去淘宝签到逛一逛.*',timeout:10,needScroll:false},
         {taskType:'app',titleRegex:'去菜鸟.*',timeout:15,needScroll:false},
 
         {taskType:'luckyDraw',titleRegex:'.*抽抽乐.*'},
@@ -179,7 +180,7 @@ function Collector () {
   
     // 其他任务
     taskUtil.initProject(this,'Manor')
-    taskUtil.doTasks(taskInfos)
+    taskUtil.doTasks(taskInfos, false)
   
     scrollUpTop()
   }
@@ -357,6 +358,11 @@ function Collector () {
               let bounds = item.bounds
               automator.clickPointRandom(bounds.centerX(), bounds.centerY())
               sleep(2000)
+              let confirmBtn = widgetUtils.widgetGetOne('确认|知道了',2000)
+              if (confirmBtn) {
+                automator.clickRandom(confirmBtn)
+                sleep(2000)
+              }
             })
           }
           debugInfo('做美食直到食材不足')
@@ -476,27 +482,30 @@ function Collector () {
     }
 
     let result = false
-    let titleObj = widgetUtils.widgetGetOne('雇佣小鸡拿饲料', 3000)
+    let titleObj = widgetUtils.widgetGetOne('雇佣小鸡拿饲料.*', 3000)
     let entryBtn = titleObj
     if (entryBtn) {
       entryBtn.click()
       LogFloaty.pushLog('等待进入雇佣小鸡窗口')
-      widgetUtils.widgetWaiting('.*雇佣\\d+只小鸡',null,20000)
-      let hireRegex = '当前还可雇佣(\\d+)只小鸡'
-      let hireText = widgetUtils.widgetGetOne(hireRegex,5000)
-      if (hireText) {
-        let hireCount = new RegExp(hireRegex).exec(hireText.text())[1]
-        LogFloaty.pushLog('可雇佣小鸡：' + hireCount)
-        for(let i = 0; i < hireCount; i++){
-          let hireBtn = widgetUtils.widgetGetOne('雇佣')
-          if (hireBtn) {
-            automator.clickRandom(hireBtn)
-            sleep(1000)
+      let waitingSuccess = widgetUtils.widgetWaiting('.*雇佣\\d+只小鸡',null,20000)
+      if (waitingSuccess) {
+        let hireRegex = '当前还可雇佣(\\d+)只小鸡'
+        let hireText = widgetUtils.widgetGetOne(hireRegex,5000)
+        if (hireText) {
+          let hireCount = new RegExp(hireRegex).exec(hireText.text())[1]
+          LogFloaty.pushLog('可雇佣小鸡：' + hireCount)
+          for(let i = 0; i < hireCount; i++){
+            let hireBtn = widgetUtils.widgetGetOne('雇佣')
+            if (hireBtn) {
+              automator.clickRandom(hireBtn)
+              sleep(1000)
+            }
           }
         }
+        automator.back()
+        result = !!hireText
+        sleep(2000)
       }
-      automator.back()
-      result = !!hireText
     }
     return result
   }
@@ -514,7 +523,7 @@ function Collector () {
    */
   this.isInTaskUI = function (projectCode, timeout) {
     timeout = timeout || 2000
-    return widgetUtils.widgetWaiting('庄园小课堂', '任务列表', timeout)
+    return widgetUtils.widgetWaiting('庄园小课堂.*', '任务列表', timeout)
   }
 
   this.startApp = function (projectCode) {
@@ -583,7 +592,7 @@ function Collector () {
       logUtils.debugInfo(['点击领取'])
       // automator.clickRandom(visiableCollect[0])
       visiableCollect[0].click()
-      sleep(500)
+      sleep(2000)
       let full = widgetUtils.widgetGetOne(config.fodder_config.feed_package_full || '饲料袋.*满.*|知道了', 1000)
       if (full) {
         LogFloaty.pushWarningLog('饲料袋已满')
@@ -591,9 +600,10 @@ function Collector () {
         _this.food_is_full = true
         let confirmBtn = widgetUtils.widgetGetOne('确认|知道了', 1000)
         if (confirmBtn) {
-          // if (confirmBtn.text()!='知道了')
-          let closeBtn = confirmBtn.parent().parent().child(0).child(0)
-          automator.clickRandom(closeBtn)
+          if (confirmBtn.text()!='知道了') {
+            confirmBtn = confirmBtn.parent().parent().child(0).child(0)
+          }
+          automator.clickRandom(confirmBtn)
           sleep(1000)
           return false
         }

@@ -49,8 +49,9 @@ function VillageRunner () {
       // 加速产币
       this.speedAward()
 
-      debugInfo(['设置 {} 分钟后启动', _this.nextVisitTime || villageConfig.interval_time || 120])
-      commonFunctions.setUpAutoStart(_this.nextVisitTime || villageConfig.interval_time || 120)
+      let sleepTime = _this.nextVisitTime || villageConfig.interval_time || 120
+      debugInfo(['设置 {} 分钟后启动', sleepTime])
+      commonFunctions.setUpAutoStart(sleepTime)
       NotificationHelper.createNotification('新村摆摊已完成，等待' + sleepTime + '分钟后自动启动',
         '下次执行时间：' + formatDate(new Date(new Date().getTime() + sleepTime * 60000)), config.notificationId * 10 + 2)
     } catch (e) {
@@ -495,6 +496,7 @@ function VillageRunner () {
         }
         debugInfo(['剩余时间正则校验结果：{}', JSON.stringify(leftTimeResult)])
         if (leftTime>0) {
+          leftTime = leftTime>120? 120 : leftTime
           _this.nextVisitTime = _this.nextVisitTime ? Math.max(leftTime, _this.nextVisitTime) : leftTime
         }
       }
@@ -1217,6 +1219,12 @@ function VillageRunner () {
       sleep(1000)
     }
   
+    limit = 3  
+    while (limit-- > 0) {
+      automator.randomScrollUp(taskUITop.start, taskUITop.end, taskUIBottom.start, taskUIBottom.end,true)
+      sleep(1000)
+    }
+
     let taskInfos = [
       {btnRegex:'去完成', tasks:[
         {taskType:'disable',titleRegex:'.*好友.*'},

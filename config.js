@@ -320,7 +320,7 @@ let default_village_config = {
   booth_position_right: [629, 1527, 386, 282],
   booth_black_list: [],
   village_reward_click_x: 550,
-  village_reward_click_y: 1180,
+  village_reward_click_y: 1096,
   interval_time: 120,
   setup_by_income_weight: false,
   friends_finding_timeout: 8000,
